@@ -162,9 +162,10 @@ export default async function handler(
     const tenantsMap = new Map((tenantsResult.data || []).map((t: any) => [t.id, t]));
     const propertiesMap = new Map((propertiesResult.data || []).map((p: any) => [p.id, p]));
 
-    // Envoyer les emails
+    // Envoyer les emails et créer les quittances si nécessaire
     let successCount = 0;
     let errorCount = 0;
+    let receiptCreatedCount = 0;
 
     for (const lease of leasesToNotify) {
       const tenant = tenantsMap.get(lease.tenant_id);
@@ -185,6 +186,56 @@ export default async function handler(
 
       // Calculer la date d'échéance
       const dueDate = calculateNextDueDate(today, lease.payment_due_day);
+      const dueDateString = dueDate.toISOString().split('T')[0];
+
+      // Vérifier si une quittance existe déjà pour ce mois
+      const { data: existingPayment, error: checkError } = await supabase
+        .from('payments')
+        .select('id')
+        .eq('lease_id', lease.id)
+        .eq('due_date', dueDateString)
+        .maybeSingle();
+
+      if (checkError) {
+        console.error(`❌ Erreur lors de la vérification du paiement pour le bail ${lease.id}:`, checkError);
+        errorCount++;
+        continue;
+      }
+
+      // Créer la quittance si elle n'existe pas
+      let paymentId: string | null = null;
+      if (!existingPayment) {
+        try {
+          const { data: newPayment, error: createError } = await supabase
+            .from('payments')
+            .insert([{
+              lease_id: lease.id,
+              amount: lease.monthly_rent,
+              due_date: dueDateString,
+              status: 'pending', // Créer comme impayé
+              payment_date: null,
+            }])
+            .select('id')
+            .single();
+
+          if (createError) {
+            console.error(`❌ Erreur lors de la création de la quittance pour le bail ${lease.id}:`, createError);
+            errorCount++;
+            continue;
+          }
+
+          paymentId = newPayment.id;
+          receiptCreatedCount++;
+          console.log(`✅ Quittance créée automatiquement pour le bail ${lease.id} (échéance: ${dueDateString})`);
+        } catch (createException: any) {
+          console.error(`❌ Exception lors de la création de la quittance pour le bail ${lease.id}:`, createException.message);
+          errorCount++;
+          continue;
+        }
+      } else {
+        paymentId = existingPayment.id;
+        console.log(`ℹ️ Quittance déjà existante pour le bail ${lease.id} (échéance: ${dueDateString})`);
+      }
 
       // Construire l'email
       const emailHtml = buildPaymentReminderEmail({
@@ -262,9 +313,10 @@ export default async function handler(
 
     return res.json({
       success: true,
-      message: `Traitement terminé : ${successCount} email(s) envoyé(s), ${errorCount} erreur(s)`,
+      message: `Traitement terminé : ${successCount} email(s) envoyé(s), ${receiptCreatedCount} quittance(s) créée(s), ${errorCount} erreur(s)`,
       processed: leasesToNotify.length,
       successCount,
+      receiptCreatedCount,
       errorCount
     });
 
