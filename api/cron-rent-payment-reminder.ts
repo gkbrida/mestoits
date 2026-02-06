@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { sendEmail } from './lib/email-sender';
+import nodemailer from 'nodemailer';
 
 /**
  * Cron job pour envoyer des rappels de paiement de loyer
@@ -193,25 +193,55 @@ export default async function handler(
         daysUntilDue: 10
       });
 
-      // Envoyer l'email directement via le module partagé
+      // Envoyer l'email directement
       try {
-        const emailResult = await sendEmail({
+        // Vérifier que les variables d'environnement sont définies
+        const zohoUser = process.env.ZOHO_USER || 'contact@mestoits.com';
+        const zohoPassword = process.env.ZOHO_PASSWORD;
+        
+        if (!zohoUser || !zohoPassword) {
+          console.error("❌ Variables d'environnement Zoho non définies");
+          errorCount++;
+          continue;
+        }
+
+        // Créer le transporteur Zoho
+        const transporter = nodemailer.createTransport({
+          host: "smtppro.zoho.eu",
+          port: 465,
+          secure: true,
+          auth: {
+            user: zohoUser,
+            pass: zohoPassword
+          },
+          tls: {
+            rejectUnauthorized: false
+          },
+          connectionTimeout: 10000,
+          greetingTimeout: 10000,
+          socketTimeout: 10000
+        });
+
+        // Vérifier la connexion
+        await transporter.verify();
+        console.log('✅ Connexion SMTP Zoho vérifiée');
+
+        // Envoyer l'email
+        const info = await transporter.sendMail({
+          from: `"Mestoits" <${zohoUser}>`,
           to: tenant.email,
           subject: `Rappel : Paiement de loyer dans 10 jours - ${property.title || 'Bien immobilier'}`,
           html: emailHtml,
           text: emailText,
         });
 
-        if (emailResult.success) {
-          console.log(`✅ Email envoyé à ${tenant.email} pour le bail ${lease.id} (MessageId: ${emailResult.messageId})`);
-          successCount++;
-        } else {
-          console.error(`❌ Erreur lors de l'envoi à ${tenant.email}:`, emailResult.error);
-          errorCount++;
-        }
+        console.log(`✅ Email envoyé à ${tenant.email} pour le bail ${lease.id} (MessageId: ${info.messageId})`);
+        successCount++;
       } catch (emailError: any) {
-        console.error(`❌ Exception lors de l'envoi à ${tenant.email}:`, emailError.message);
-        console.error(`   Stack:`, emailError.stack);
+        console.error(`❌ Erreur lors de l'envoi à ${tenant.email}:`, emailError.message);
+        if (emailError.code) {
+          console.error(`   Code d'erreur: ${emailError.code}`);
+        }
         errorCount++;
       }
     }
