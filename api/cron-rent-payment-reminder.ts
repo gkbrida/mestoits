@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
+import { sendEmail } from './lib/email-sender';
 
 /**
  * Cron job pour envoyer des rappels de paiement de loyer
@@ -24,7 +25,7 @@ export default async function handler(
   const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
   
   if (isProduction) {
-    const authHeader = req.headers.authorization;
+    const authHeader = req.headers?.authorization;
     const cronSecret = process.env.CRON_SECRET;
     
     if (!cronSecret) {
@@ -192,42 +193,25 @@ export default async function handler(
         daysUntilDue: 10
       });
 
-      // Envoyer l'email via l'API send-email
+      // Envoyer l'email directement via le module partagé
       try {
-        // Utiliser l'URL complète du site pour l'envoi d'email
-        // En production Vercel, utiliser l'URL du déploiement ou une variable d'environnement
-        const baseUrl = process.env.NEXT_PUBLIC_APP_URL 
-          || process.env.VERCEL_URL 
-          || 'https://mestoits-v2.vercel.app';
-        
-        // S'assurer que l'URL commence par https://
-        const emailApiUrl = baseUrl.startsWith('http') 
-          ? `${baseUrl}/api/send-email`
-          : `https://${baseUrl}/api/send-email`;
-        
-        const emailResponse = await fetch(emailApiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            to: tenant.email,
-            subject: `Rappel : Paiement de loyer dans 10 jours - ${property.title || 'Bien immobilier'}`,
-            html: emailHtml,
-            text: emailText,
-          }),
+        const emailResult = await sendEmail({
+          to: tenant.email,
+          subject: `Rappel : Paiement de loyer dans 10 jours - ${property.title || 'Bien immobilier'}`,
+          html: emailHtml,
+          text: emailText,
         });
 
-        if (emailResponse.ok) {
-          console.log(`✅ Email envoyé à ${tenant.email} pour le bail ${lease.id}`);
+        if (emailResult.success) {
+          console.log(`✅ Email envoyé à ${tenant.email} pour le bail ${lease.id} (MessageId: ${emailResult.messageId})`);
           successCount++;
         } else {
-          const errorData = await emailResponse.json();
-          console.error(`❌ Erreur lors de l'envoi à ${tenant.email}:`, errorData);
+          console.error(`❌ Erreur lors de l'envoi à ${tenant.email}:`, emailResult.error);
           errorCount++;
         }
       } catch (emailError: any) {
-        console.error(`❌ Erreur lors de l'envoi à ${tenant.email}:`, emailError.message);
+        console.error(`❌ Exception lors de l'envoi à ${tenant.email}:`, emailError.message);
+        console.error(`   Stack:`, emailError.stack);
         errorCount++;
       }
     }
