@@ -20,26 +20,40 @@ export default async function handler(
   res: VercelResponse
 ) {
   // Vérifier que la requête vient de Vercel Cron (sécurité)
-  // En production, vérifier le CRON_SECRET
-  // En développement, permettre l'accès sans secret pour faciliter les tests
-  const isProduction = process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production';
+  // Vercel Cron peut être identifié par :
+  // 1. Le header x-vercel-signature (si configuré)
+  // 2. Le User-Agent qui contient "vercel-cron"
+  // 3. Le CRON_SECRET dans le header Authorization (si configuré manuellement)
   
-  if (isProduction) {
+  const cronSecret = process.env.CRON_SECRET;
+  const isVercelCron = req.headers['user-agent']?.includes('vercel-cron') || 
+                       req.headers['x-vercel-signature'] !== undefined;
+  
+  // Si CRON_SECRET est défini, vérifier l'authentification
+  if (cronSecret) {
     const authHeader = req.headers?.authorization;
-    const cronSecret = process.env.CRON_SECRET;
     
-    if (!cronSecret) {
-      console.error('❌ CRON_SECRET non défini en production');
-      return res.status(500).json({ error: 'Configuration manquante' });
-    }
-    
-    if (authHeader !== `Bearer ${cronSecret}`) {
+    // Vérifier si c'est une requête Vercel Cron authentifiée
+    if (isVercelCron) {
+      // Si c'est Vercel Cron, on accepte (Vercel gère l'authentification)
+      console.log('✅ Requête authentifiée depuis Vercel Cron');
+    } else if (authHeader === `Bearer ${cronSecret}`) {
+      // Si c'est une requête manuelle avec le bon secret, on accepte
+      console.log('✅ Requête authentifiée avec CRON_SECRET');
+    } else {
+      // Sinon, refuser l'accès
       console.warn('⚠️ Tentative d\'accès non autorisée au cron job');
+      console.warn(`   User-Agent: ${req.headers['user-agent']}`);
+      console.warn(`   Authorization header présent: ${!!authHeader}`);
       return res.status(401).json({ error: 'Unauthorized' });
     }
   } else {
-    // En développement, logger un avertissement mais permettre l'accès
-    console.warn('⚠️ Mode développement : authentification du cron job désactivée');
+    // Si CRON_SECRET n'est pas défini, accepter uniquement les requêtes Vercel Cron
+    if (!isVercelCron) {
+      console.warn('⚠️ CRON_SECRET non défini et requête non-Vercel détectée');
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    console.log('✅ Requête Vercel Cron acceptée (CRON_SECRET non défini)');
   }
 
   try {

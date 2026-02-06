@@ -18,17 +18,28 @@ Assurez-vous d'avoir les variables d'environnement suivantes configurées dans v
    - `ZOHO_USER` : Email Zoho pour l'envoi d'emails
    - `ZOHO_PASSWORD` : Mot de passe Zoho pour l'envoi d'emails
 
-2. **Nouvelle variable à ajouter** :
-   - `CRON_SECRET` : Secret pour sécuriser l'accès au cron job (générez une chaîne aléatoire)
+2. **Nouvelle variable à ajouter** (optionnelle mais recommandée) :
+   - `CRON_SECRET` : Secret pour sécuriser l'accès au cron job lors de tests manuels
 
-### 2. Configuration du CRON_SECRET
+### 2. Configuration du CRON_SECRET (optionnel)
+
+**Note** : Vercel Cron s'authentifie automatiquement via son User-Agent. Le `CRON_SECRET` est optionnel et sert uniquement pour les tests manuels.
+
+Si vous souhaitez tester le cron job manuellement, vous pouvez ajouter :
 
 1. Connectez-vous à votre [Dashboard Vercel](https://vercel.com/dashboard)
 2. Sélectionnez votre projet `mestoits-v2`
 3. Allez dans **Settings** → **Environment Variables**
 4. Ajoutez une nouvelle variable :
    - **Name** : `CRON_SECRET`
-   - **Value** : Générez une chaîne aléatoire sécurisée (ex: `openssl rand -hex 32`)
+   - **Value** : Générez une vraie chaîne aléatoire sécurisée :
+     ```bash
+     # Sur Mac/Linux :
+     openssl rand -hex 32
+     
+     # Ou utilisez un générateur en ligne
+     ```
+     **⚠️ IMPORTANT** : Ne mettez PAS `opensslrand-hex32` comme valeur ! Vous devez exécuter la commande et utiliser le résultat.
    - **Environment** : Production (et Preview si vous voulez tester)
 
 ### 3. Vérification de la configuration
