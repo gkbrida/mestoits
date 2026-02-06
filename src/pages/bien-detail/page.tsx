@@ -199,6 +199,39 @@ function CharacteristicsSection({ property, conditionLabels, standingLabels, get
             </div>
           </div>
         )}
+        {/* Heure d'arrivée - Location courte durée */}
+        {(property as any).operation_type === 'short-term-rental' && (property as any).check_in_time && (
+          <div>
+            <div className="text-xs sm:text-sm text-gray-600 mb-1">Heure d'arrivée</div>
+            <div className="text-sm sm:text-base font-semibold text-gray-900">
+              {(() => {
+                const time = (property as any).check_in_time;
+                // Si le format est "HH:mm:ss", prendre seulement "HH:mm"
+                if (typeof time === 'string' && time.includes(':')) {
+                  return time.substring(0, 5); // Prendre les 5 premiers caractères (HH:mm)
+                }
+                return time;
+              })()}
+            </div>
+          </div>
+        )}
+        {/* Heure de départ - Location courte durée */}
+        {(property as any).operation_type === 'short-term-rental' && (property as any).check_out_time && (
+          <div>
+            <div className="text-xs sm:text-sm text-gray-600 mb-1">Heure de départ</div>
+            <div className="text-sm sm:text-base font-semibold text-gray-900">
+              {(() => {
+                const time = (property as any).check_out_time;
+                // Si le format est "HH:mm:ss", prendre seulement "HH:mm"
+                if (typeof time === 'string' && time.includes(':')) {
+                  return time.substring(0, 5); // Prendre les 5 premiers caractères (HH:mm)
+                }
+                return time;
+              })()}
+            </div>
+          </div>
+        )}
+       
         {/* Immeuble occupé */}
         {isBuilding && (property as any).building_occupied !== undefined && (
           <div>

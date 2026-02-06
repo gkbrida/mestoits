@@ -43,6 +43,11 @@ interface PropertyData {
   advance_rent?: number;
   service_charges?: number;
   
+  // Location courte durée
+  check_in_time?: string; // Heure d'arrivée (format HH:mm)
+  check_out_time?: string; // Heure de départ (format HH:mm)
+  min_nights?: number; // Nombre minimal de nuitées à réserver
+  
   // Détails
   condition?: string;
   standing?: string;

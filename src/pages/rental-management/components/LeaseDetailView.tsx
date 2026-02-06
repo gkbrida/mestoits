@@ -51,6 +51,9 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
   const [showPhotoGallery, setShowPhotoGallery] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [currentPhotoList, setCurrentPhotoList] = useState<string[]>([]);
+  const [showReceiptConfirmationModal, setShowReceiptConfirmationModal] = useState(false);
+  const [existingReceiptInfo, setExistingReceiptInfo] = useState<{status: string, dueDate: string} | null>(null);
+  const [confirmationStep, setConfirmationStep] = useState(1); // 1 = première confirmation, 2 = deuxième confirmation
   
   // Forms
   const [inventoryForm, setInventoryForm] = useState({
@@ -283,16 +286,60 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
       return;
     }
 
+    // Vérifier que la date d'échéance est renseignée
+    if (!receiptForm.dueDate) {
+      alert('Veuillez renseigner la date d\'échéance.');
+      return;
+    }
+
+    const dueDateString = receiptForm.dueDate;
+
+    // Vérifier si un paiement existe déjà pour cette échéance
+    const { data: existingPayment, error: checkError } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('lease_id', lease.id)
+      .eq('due_date', dueDateString)
+      .maybeSingle();
+
+    if (checkError) {
+      console.error('Erreur lors de la vérification du paiement:', checkError);
+      alert('Erreur lors de la vérification du paiement existant.');
+      return;
+    }
+
+    // Si une quittance existe déjà, demander confirmation avec double validation
+    if (existingPayment) {
+      setExistingReceiptInfo({
+        status: existingPayment.status,
+        dueDate: existingPayment.due_date
+      });
+      setConfirmationStep(1);
+      setShowReceiptConfirmationModal(true);
+      return;
+    }
+
+    // Si aucune quittance n'existe, procéder directement à la création
+    await proceedWithReceiptGeneration(dueDateString);
+  };
+
+  const handleConfirmReceiptGeneration = async () => {
+    if (confirmationStep === 1) {
+      // Première confirmation : passer à la deuxième étape
+      setConfirmationStep(2);
+    } else if (confirmationStep === 2) {
+      // Deuxième confirmation : procéder à la génération
+      setShowReceiptConfirmationModal(false);
+      setConfirmationStep(1);
+      if (receiptForm.dueDate) {
+        await proceedWithReceiptGeneration(receiptForm.dueDate);
+      }
+    }
+  };
+
+  const proceedWithReceiptGeneration = async (dueDateString: string) => {
     setActionLoading(true);
     try {
-      // Vérifier que la date d'échéance est renseignée
-      if (!receiptForm.dueDate) {
-        alert('Veuillez renseigner la date d\'échéance.');
-        return;
-      }
-
-      const dueDateString = receiptForm.dueDate;
-
       // Vérifier si un paiement existe déjà pour cette échéance
       let matchingPayment: RentPayment | undefined;
 
@@ -1563,6 +1610,93 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
                     Générer
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Receipt Confirmation Modal (Double Validation) */}
+      {showReceiptConfirmationModal && existingReceiptInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-2xl shadow-xl max-w-[500px] w-full p-8">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-2xl font-bold text-gray-900">
+                {confirmationStep === 1 ? '⚠️ Quittance existante détectée' : '⚠️ Confirmation finale'}
+              </h3>
+              <button
+                onClick={() => {
+                  setShowReceiptConfirmationModal(false);
+                  setConfirmationStep(1);
+                  setExistingReceiptInfo(null);
+                }}
+                className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+              >
+                <i className="ri-close-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+              </button>
+            </div>
+
+            {confirmationStep === 1 ? (
+              <div className="space-y-4">
+                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                  <p className="text-sm text-yellow-800">
+                    <strong>Attention :</strong> Une quittance existe déjà pour la date d'échéance du{' '}
+                    <strong>{new Date(existingReceiptInfo.dueDate).toLocaleDateString('fr-FR', { 
+                      day: 'numeric', 
+                      month: 'long', 
+                      year: 'numeric' 
+                    })}</strong>.
+                  </p>
+                  <p className="text-sm text-yellow-800 mt-2">
+                    Statut actuel : <strong>
+                      {existingReceiptInfo.status === 'paid' ? 'Payée' : 'Impayée'}
+                    </strong>
+                  </p>
+                </div>
+                <p className="text-gray-700">
+                  Souhaitez-vous vraiment générer une nouvelle quittance pour ce mois ? 
+                  Cette action créera une nouvelle entrée dans le système.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+                  <p className="text-sm text-red-800 font-semibold">
+                    ⚠️ Dernière confirmation requise
+                  </p>
+                  <p className="text-sm text-red-800 mt-2">
+                    Vous êtes sur le point de créer une quittance alors qu'une quittance existe déjà pour ce mois.
+                    Cette action peut créer des doublons dans votre système de gestion.
+                  </p>
+                </div>
+                <p className="text-gray-700">
+                  Confirmez-vous définitivement la génération de cette quittance ?
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-4 mt-8">
+              <button
+                onClick={() => {
+                  setShowReceiptConfirmationModal(false);
+                  setConfirmationStep(1);
+                  setExistingReceiptInfo(null);
+                }}
+                disabled={actionLoading}
+                className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleConfirmReceiptGeneration}
+                disabled={actionLoading}
+                className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 ${
+                  confirmationStep === 1 
+                    ? 'bg-yellow-600 text-white hover:bg-yellow-700' 
+                    : 'bg-red-600 text-white hover:bg-red-700'
+                }`}
+              >
+                {confirmationStep === 1 ? 'Continuer' : 'Confirmer définitivement'}
               </button>
             </div>
           </div>

@@ -45,7 +45,7 @@ export default function LatestListingsSection() {
     try {
       setLoading(true);
       const { data, error } = await supabase
-        .from('properties')
+        .from('properties_02')
         .select('id, title, price, property_type, city, bedrooms, surface_area, images, owner_id, offered_by')
         .eq('status', 'active')
         .order('created_at', { ascending: false })

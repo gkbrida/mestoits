@@ -19,11 +19,34 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
   const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
   const [userData, setUserData] = useState<any>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [minNights, setMinNights] = useState<number | null>(null);
 
   useEffect(() => {
     checkAuth();
     loadUnavailableDates();
+    loadPropertyDetails();
   }, [propertyId]);
+
+  const loadPropertyDetails = async () => {
+    try {
+      const { data: propertyData, error } = await supabase
+        .from('properties_02')
+        .select('min_nights')
+        .eq('id', propertyId)
+        .single();
+
+      if (error) {
+        console.error('Erreur lors du chargement des détails de la propriété:', error);
+        return;
+      }
+
+      if (propertyData?.min_nights) {
+        setMinNights(propertyData.min_nights);
+      }
+    } catch (error) {
+      console.error('Erreur lors du chargement des détails de la propriété:', error);
+    }
+  };
 
   const checkAuth = async () => {
     try {
@@ -270,6 +293,19 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
           />
         </div>
 
+        
+
+        {/* Avertissement si le nombre de nuits est insuffisant */}
+        {nights > 0 && minNights && nights < minNights && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+            <p className="text-xs sm:text-sm text-yellow-800">
+              <i className="ri-alert-line mr-1"></i>
+              Le séjour minimum est de <strong>{minNights} nuitée{minNights > 1 ? 's' : ''}</strong>. 
+              Vous avez sélectionné {nights} nuitée{nights > 1 ? 's' : ''}.
+            </p>
+          </div>
+        )}
+
         {/* Résumé du calcul */}
         {nights > 0 && (
           <div className="bg-gray-50 rounded-lg p-4 space-y-2">
@@ -293,9 +329,9 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
         {/* Bouton de réservation */}
         <button
           onClick={handleReserve}
-          disabled={!startDate || !endDate || nights === 0 || paymentLoading}
+          disabled={!startDate || !endDate || nights === 0 || paymentLoading || (minNights !== null && nights < minNights)}
           className={`w-full px-6 py-4 rounded-lg font-semibold text-white transition-colors ${
-            !startDate || !endDate || nights === 0 || paymentLoading
+            !startDate || !endDate || nights === 0 || paymentLoading || (minNights !== null && nights < minNights)
               ? 'bg-gray-400 cursor-not-allowed'
               : 'bg-teal-600 hover:bg-teal-700'
           }`}

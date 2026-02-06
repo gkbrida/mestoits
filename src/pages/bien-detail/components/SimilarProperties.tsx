@@ -103,7 +103,7 @@ export default function SimilarProperties({
                 />
                 {/* Price Badge */}
                 <div className="absolute top-2 sm:top-3 md:top-4 left-2 sm:left-3 md:left-4 px-2 sm:px-3 md:px-4 py-1 sm:py-1.5 md:py-2 bg-black/80 backdrop-blur-sm text-white text-xs sm:text-sm font-bold rounded-lg">
-                  {property.price.toLocaleString()} FCFA
+                  {property.price ? property.price.toLocaleString() : '0'} FCFA
                 </div>
               </div>
 
@@ -125,16 +125,20 @@ export default function SimilarProperties({
                       {property.bedrooms}
                     </div>
                   )}
-                  <div className="flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm text-gray-600">
-                    <i className="ri-ruler-line text-sm sm:text-base w-3 h-3 sm:w-4 sm:h-4 flex items-center justify-center"></i>
-                    {property.surface_area}m²
-                  </div>
+                  {property.surface_area && (
+                    <div className="flex items-center gap-1 sm:gap-1.5 text-xs sm:text-sm text-gray-600">
+                      <i className="ri-ruler-line text-sm sm:text-base w-3 h-3 sm:w-4 sm:h-4 flex items-center justify-center"></i>
+                      {property.surface_area}m²
+                    </div>
+                  )}
                 </div>
 
                 {/* Price per sqm */}
-                <div className="text-xs sm:text-sm text-gray-600">
-                  <span className="font-semibold">{property.price_per_sqm.toLocaleString()}FCFA/m²</span>
-                </div>
+                {property.price_per_sqm && (
+                  <div className="text-xs sm:text-sm text-gray-600">
+                    <span className="font-semibold">{property.price_per_sqm.toLocaleString()}FCFA/m²</span>
+                  </div>
+                )}
               </div>
             </a>
           );

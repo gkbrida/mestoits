@@ -261,6 +261,68 @@ export default function PropertyDetailsStep({ data, onUpdate, onValidationChange
               </div>
             )}
 
+            {/* Heure d'arrivée (location courte durée) */}
+            {data.operation_type === 'short-term-rental' && (
+              <div className="mt-3 md:mt-4">
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Heure d'arrivée
+                </label>
+                <input
+                  type="time"
+                  value={data.check_in_time || ''}
+                  onChange={(e) => onUpdate({ check_in_time: e.target.value || undefined })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:ring-2 focus:ring-teal-600 focus:border-transparent text-xs md:text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">Heure à laquelle les locataires peuvent arriver</p>
+              </div>
+            )}
+
+            {/* Heure de départ (location courte durée) */}
+            {data.operation_type === 'short-term-rental' && (
+              <div className="mt-3 md:mt-4">
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Heure de départ
+                </label>
+                <input
+                  type="time"
+                  value={data.check_out_time || ''}
+                  onChange={(e) => onUpdate({ check_out_time: e.target.value || undefined })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:ring-2 focus:ring-teal-600 focus:border-transparent text-xs md:text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">Heure à laquelle les locataires doivent quitter</p>
+              </div>
+            )}
+
+            {/* Nombre minimal de nuitées (location courte durée) */}
+            {data.operation_type === 'short-term-rental' && (
+              <div className="mt-3 md:mt-4">
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Nombre minimal de nuitées à réserver
+                </label>
+                <input
+                  type="number"
+                  value={data.min_nights || ''}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    if (value === '' || value === null || value === undefined) {
+                      onUpdate({ min_nights: undefined });
+                    } else {
+                      const numValue = parseInt(value, 10);
+                      if (!isNaN(numValue) && numValue > 0) {
+                        onUpdate({ min_nights: numValue });
+                      } else {
+                        onUpdate({ min_nights: undefined });
+                      }
+                    }
+                  }}
+                  placeholder="1"
+                  min="1"
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:ring-2 focus:ring-teal-600 focus:border-transparent text-xs md:text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">Nombre minimum de nuits requises pour une réservation</p>
+              </div>
+            )}
+
             {/* Numéro d'étage (si appartement) */}
             {isApartment && (
               <div className="mt-3 md:mt-4">
