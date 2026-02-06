@@ -20,6 +20,12 @@
         }
       ]
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron-rent-payment-reminder",
+      "schedule": "55 13 * * *"
+    }
   ]
 }
 
