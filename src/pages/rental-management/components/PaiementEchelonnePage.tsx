@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { useEmail } from '../../../hooks/useEmail';
 
 interface PaiementEchelonnePageProps {
   userId: string;
@@ -18,6 +19,7 @@ interface InstallmentPlan {
   installment_amount: number;
   start_date: string;
   frequency: string;
+  payment_due_day?: number | null;
   status: string;
   payer_first_name?: string;
   payer_last_name?: string;
@@ -52,6 +54,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
     number_of_installments: '',
     start_date: '',
     frequency: 'monthly',
+    payment_due_day: '',
     payer_first_name: '',
     payer_last_name: '',
     payer_birth_date: '',
@@ -179,15 +182,35 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
     }
   };
 
+  // Fonction pour calculer la date d'échéance basée sur payment_due_day
+  const calculateDueDate = (baseDate: Date, paymentDueDay: number, monthOffset: number): Date => {
+    const targetDate = new Date(baseDate);
+    targetDate.setMonth(targetDate.getMonth() + monthOffset);
+    
+    // Gérer les mois avec moins de 31 jours
+    const daysInMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+    const dueDay = Math.min(paymentDueDay, daysInMonth);
+    
+    targetDate.setDate(dueDay);
+    return targetDate;
+  };
+
   const handleSubmit = async () => {
     if (!form.property_id || !form.total_amount || !form.number_of_installments || !form.start_date) {
       alert('Veuillez remplir tous les champs obligatoires');
       return;
     }
 
+    // Vérifier payment_due_day si frequency est monthly ou quarterly
+    if ((form.frequency === 'monthly' || form.frequency === 'quarterly') && !form.payment_due_day) {
+      alert('Veuillez renseigner le jour du mois pour les échéances');
+      return;
+    }
+
     const totalAmount = parseFloat(form.total_amount);
     const numberOfInstallments = parseInt(form.number_of_installments);
     const installmentAmount = totalAmount / numberOfInstallments;
+    const paymentDueDay = form.payment_due_day ? parseInt(form.payment_due_day) : null;
 
     setActionLoading(true);
     try {
@@ -199,6 +222,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         installment_amount: installmentAmount,
         start_date: form.start_date,
         frequency: form.frequency,
+        payment_due_day: paymentDueDay,
         status: 'active',
         payer_first_name: form.payer_first_name,
         payer_last_name: form.payer_last_name,
@@ -235,13 +259,31 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         const startDate = new Date(form.start_date);
         
         for (let i = 0; i < numberOfInstallments; i++) {
-          const dueDate = new Date(startDate);
+          let dueDate: Date;
+          
           if (form.frequency === 'monthly') {
-            dueDate.setMonth(dueDate.getMonth() + i);
+            // Utiliser payment_due_day pour les paiements mensuels
+            if (paymentDueDay) {
+              dueDate = calculateDueDate(startDate, paymentDueDay, i);
+            } else {
+              // Fallback si payment_due_day n'est pas défini
+              dueDate = new Date(startDate);
+              dueDate.setMonth(dueDate.getMonth() + i);
+            }
           } else if (form.frequency === 'weekly') {
+            dueDate = new Date(startDate);
             dueDate.setDate(dueDate.getDate() + (i * 7));
           } else if (form.frequency === 'quarterly') {
-            dueDate.setMonth(dueDate.getMonth() + (i * 3));
+            // Utiliser payment_due_day pour les paiements trimestriels
+            if (paymentDueDay) {
+              dueDate = calculateDueDate(startDate, paymentDueDay, i * 3);
+            } else {
+              // Fallback si payment_due_day n'est pas défini
+              dueDate = new Date(startDate);
+              dueDate.setMonth(dueDate.getMonth() + (i * 3));
+            }
+          } else {
+            dueDate = new Date(startDate);
           }
 
           installments.push({
@@ -258,6 +300,95 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
           .insert(installments);
 
         if (installmentsError) throw installmentsError;
+
+        // Envoyer un email au payeur avec toutes les informations
+        if (form.payer_email) {
+          try {
+            // Récupérer les informations du créateur (propriétaire)
+            const { data: ownerData } = await supabase
+              .from('users_2025_12_01_11_29')
+              .select('full_name, email, phone')
+              .eq('id', userId)
+              .single();
+
+            // Récupérer les informations du bien
+            const { data: propertyData } = await supabase
+              .from('properties_02')
+              .select('title, address, city, surface_area, rooms')
+              .eq('id', form.property_id)
+              .single();
+
+            // Construire l'email HTML
+            const emailHtml = buildInstallmentPlanEmail({
+              payerName: `${form.payer_first_name} ${form.payer_last_name}`,
+              ownerName: ownerData?.full_name || 'Le propriétaire',
+              ownerEmail: ownerData?.email || '',
+              ownerPhone: ownerData?.phone || '',
+              propertyTitle: propertyData?.title || 'Bien immobilier',
+              propertyAddress: propertyData?.address || '',
+              propertyCity: propertyData?.city || '',
+              propertySurface: propertyData?.surface_area,
+              propertyRooms: propertyData?.rooms,
+              totalAmount: totalAmount,
+              numberOfInstallments: numberOfInstallments,
+              installmentAmount: installmentAmount,
+              frequency: form.frequency,
+              paymentDueDay: paymentDueDay,
+              startDate: form.start_date,
+              installments: installments.map(inst => ({
+                number: inst.installment_number,
+                dueDate: inst.due_date,
+                amount: inst.amount
+              }))
+            });
+
+            const emailText = buildInstallmentPlanEmailText({
+              payerName: `${form.payer_first_name} ${form.payer_last_name}`,
+              ownerName: ownerData?.full_name || 'Le propriétaire',
+              ownerEmail: ownerData?.email || '',
+              ownerPhone: ownerData?.phone || '',
+              propertyTitle: propertyData?.title || 'Bien immobilier',
+              propertyAddress: propertyData?.address || '',
+              propertyCity: propertyData?.city || '',
+              propertySurface: propertyData?.surface_area,
+              propertyRooms: propertyData?.rooms,
+              totalAmount: totalAmount,
+              numberOfInstallments: numberOfInstallments,
+              installmentAmount: installmentAmount,
+              frequency: form.frequency,
+              paymentDueDay: paymentDueDay,
+              startDate: form.start_date,
+              installments: installments.map(inst => ({
+                number: inst.installment_number,
+                dueDate: inst.due_date,
+                amount: inst.amount
+              }))
+            });
+
+            // Envoyer l'email via l'API
+            const emailResponse = await fetch('/api/send-email', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                to: form.payer_email,
+                subject: `Plan de paiement échelonné créé - ${propertyData?.title || 'Bien immobilier'}`,
+                html: emailHtml,
+                text: emailText,
+              }),
+            });
+
+            if (!emailResponse.ok) {
+              console.warn('Erreur lors de l\'envoi de l\'email:', await emailResponse.text());
+            } else {
+              console.log('✅ Email envoyé au payeur');
+            }
+          } catch (emailError: any) {
+            console.error('Erreur lors de l\'envoi de l\'email:', emailError);
+            // Ne pas bloquer la création du plan si l'email échoue
+          }
+        }
       }
 
       setShowModal(false);
@@ -268,6 +399,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         number_of_installments: '',
         start_date: '',
         frequency: 'monthly',
+        payment_due_day: '',
         payer_first_name: '',
         payer_last_name: '',
         payer_birth_date: '',
@@ -321,6 +453,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       number_of_installments: plan.number_of_installments.toString(),
       start_date: plan.start_date,
       frequency: plan.frequency,
+      payment_due_day: plan.payment_due_day?.toString() || '',
       payer_first_name: plan.payer_first_name || '',
       payer_last_name: plan.payer_last_name || '',
       payer_birth_date: plan.payer_birth_date || '',
@@ -410,6 +543,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 number_of_installments: '',
                 start_date: '',
                 frequency: 'monthly',
+                payment_due_day: '',
                 payer_first_name: '',
                 payer_last_name: '',
                 payer_birth_date: '',
@@ -435,6 +569,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 number_of_installments: '',
                 start_date: '',
                 frequency: 'monthly',
+                payment_due_day: '',
                 payer_first_name: '',
                 payer_last_name: '',
                 payer_birth_date: '',
@@ -723,6 +858,32 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 </div>
               </div>
 
+              {/* Jour d'échéance (pour monthly et quarterly) */}
+              {(form.frequency === 'monthly' || form.frequency === 'quarterly') && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Jour du mois pour les échéances <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    value={form.payment_due_day}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '' || (parseInt(value) >= 1 && parseInt(value) <= 31)) {
+                        setForm({ ...form, payment_due_day: value });
+                      }
+                    }}
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
+                    placeholder="5"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Jour du mois où le payeur doit effectuer les paiements (1-31)
+                  </p>
+                </div>
+              )}
+
               {/* Informations du payeur */}
               <div className="border-t border-gray-200 pt-4 mt-4">
                 <h4 className="text-sm font-semibold text-gray-700 mb-4">Informations du payeur *</h4>
@@ -832,4 +993,236 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       )}
     </div>
   );
+}
+
+/**
+ * Construit l'email HTML pour le plan de paiement échelonné
+ */
+function buildInstallmentPlanEmail(data: {
+  payerName: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  propertyTitle: string;
+  propertyAddress: string;
+  propertyCity: string;
+  propertySurface?: number;
+  propertyRooms?: number;
+  totalAmount: number;
+  numberOfInstallments: number;
+  installmentAmount: number;
+  frequency: string;
+  paymentDueDay: number | null;
+  startDate: string;
+  installments: Array<{ number: number; dueDate: string; amount: number }>;
+}): string {
+  const formatPrice = (price: number) => {
+    return `${price.toLocaleString('fr-FR')} FCFA`;
+  };
+
+  const formatDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getFrequencyLabel = (frequency: string) => {
+    const labels: Record<string, string> = {
+      weekly: 'Hebdomadaire',
+      monthly: 'Mensuel',
+      quarterly: 'Trimestriel'
+    };
+    return labels[frequency] || frequency;
+  };
+
+  const propertyInfo = data.propertyAddress || data.propertyCity
+    ? `${data.propertyAddress || ''}, ${data.propertyCity || ''}`.trim().replace(/^,\s*|,\s*$/g, '')
+    : 'Adresse non renseignée';
+
+  const propertyDetails = [];
+  if (data.propertySurface) propertyDetails.push(`${data.propertySurface} m²`);
+  if (data.propertyRooms) propertyDetails.push(`${data.propertyRooms} pièce${data.propertyRooms > 1 ? 's' : ''}`);
+
+  const installmentsList = data.installments.map(inst => `
+    <tr style="border-bottom: 1px solid #e5e7eb;">
+      <td style="padding: 12px; text-align: center;">${inst.number}</td>
+      <td style="padding: 12px;">${formatDate(inst.dueDate)}</td>
+      <td style="padding: 12px; text-align: right; font-weight: bold;">${formatPrice(inst.amount)}</td>
+    </tr>
+  `).join('');
+
+  const paymentDueDayInfo = data.paymentDueDay
+    ? `<p><strong>Jour d'échéance :</strong> Le ${data.paymentDueDay} de chaque mois</p>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+    .info-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #14b8a6; }
+    .property-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #0d9488; }
+    .plan-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #10b981; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+    th { background: #f3f4f6; padding: 12px; text-align: left; font-weight: bold; }
+    td { padding: 12px; }
+    .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 12px; }
+    .highlight { color: #14b8a6; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Plan de paiement échelonné créé</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour <strong>${data.payerName}</strong>,</p>
+      <p>Un plan de paiement échelonné a été créé pour vous par <strong>${data.ownerName}</strong>.</p>
+      
+      <div class="property-box">
+        <h3 style="margin-top: 0; color: #0d9488;">Informations du bien</h3>
+        <p><strong>Titre:</strong> ${data.propertyTitle}</p>
+        <p><strong>Adresse:</strong> ${propertyInfo}</p>
+        ${propertyDetails.length > 0 ? `<p><strong>Caractéristiques:</strong> ${propertyDetails.join(', ')}</p>` : ''}
+      </div>
+
+      <div class="info-box">
+        <h3 style="margin-top: 0; color: #14b8a6;">Informations du créateur</h3>
+        <p><strong>Nom:</strong> ${data.ownerName}</p>
+        ${data.ownerEmail ? `<p><strong>Email:</strong> ${data.ownerEmail}</p>` : ''}
+        ${data.ownerPhone ? `<p><strong>Téléphone:</strong> ${data.ownerPhone}</p>` : ''}
+      </div>
+
+      <div class="plan-box">
+        <h3 style="margin-top: 0; color: #10b981;">Détails du plan de paiement</h3>
+        <p><strong>Montant total:</strong> <span class="highlight">${formatPrice(data.totalAmount)}</span></p>
+        <p><strong>Nombre d'échéances:</strong> ${data.numberOfInstallments}</p>
+        <p><strong>Montant par échéance:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span></p>
+        <p><strong>Fréquence:</strong> ${getFrequencyLabel(data.frequency)}</p>
+        <p><strong>Date de début:</strong> ${formatDate(data.startDate)}</p>
+        ${paymentDueDayInfo}
+      </div>
+
+      <div class="plan-box">
+        <h3 style="margin-top: 0; color: #10b981;">Calendrier des échéances</h3>
+        <table>
+          <thead>
+            <tr>
+              <th style="text-align: center;">N°</th>
+              <th>Date d'échéance</th>
+              <th style="text-align: right;">Montant</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${installmentsList}
+          </tbody>
+        </table>
+      </div>
+
+      <p>Veuillez noter ces dates d'échéance et effectuer les paiements en temps voulu.</p>
+      <p>Si vous avez des questions, n'hésitez pas à contacter ${data.ownerName}${data.ownerEmail ? ` à ${data.ownerEmail}` : ''}${data.ownerPhone ? ` ou au ${data.ownerPhone}` : ''}.</p>
+      <p>Cordialement,<br><strong>L'équipe Mestoits</strong></p>
+    </div>
+    <div class="footer">
+      <p>Cet email a été envoyé automatiquement par Mestoits</p>
+      <p>© ${new Date().getFullYear()} Mestoits - Tous droits réservés</p>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Construit l'email texte pour le plan de paiement échelonné
+ */
+function buildInstallmentPlanEmailText(data: {
+  payerName: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  propertyTitle: string;
+  propertyAddress: string;
+  propertyCity: string;
+  propertySurface?: number;
+  propertyRooms?: number;
+  totalAmount: number;
+  numberOfInstallments: number;
+  installmentAmount: number;
+  frequency: string;
+  paymentDueDay: number | null;
+  startDate: string;
+  installments: Array<{ number: number; dueDate: string; amount: number }>;
+}): string {
+  const formatPrice = (price: number) => {
+    return `${price.toLocaleString('fr-FR')} FCFA`;
+  };
+
+  const formatDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const getFrequencyLabel = (frequency: string) => {
+    const labels: Record<string, string> = {
+      weekly: 'Hebdomadaire',
+      monthly: 'Mensuel',
+      quarterly: 'Trimestriel'
+    };
+    return labels[frequency] || frequency;
+  };
+
+  const propertyInfo = data.propertyAddress || data.propertyCity
+    ? `${data.propertyAddress || ''}, ${data.propertyCity || ''}`.trim().replace(/^,\s*|,\s*$/g, '')
+    : 'Adresse non renseignée';
+
+  const propertyDetails = [];
+  if (data.propertySurface) propertyDetails.push(`${data.propertySurface} m²`);
+  if (data.propertyRooms) propertyDetails.push(`${data.propertyRooms} pièce${data.propertyRooms > 1 ? 's' : ''}`);
+
+  const installmentsList = data.installments.map(inst => 
+    `  ${inst.number}. ${formatDate(inst.dueDate)} - ${formatPrice(inst.amount)}`
+  ).join('\n');
+
+  const paymentDueDayInfo = data.paymentDueDay
+    ? `Jour d'échéance: Le ${data.paymentDueDay} de chaque mois\n`
+    : '';
+
+  return `Bonjour ${data.payerName},
+
+Un plan de paiement échelonné a été créé pour vous par ${data.ownerName}.
+
+INFORMATIONS DU BIEN:
+- Titre: ${data.propertyTitle}
+- Adresse: ${propertyInfo}
+${propertyDetails.length > 0 ? `- Caractéristiques: ${propertyDetails.join(', ')}\n` : ''}
+INFORMATIONS DU CRÉATEUR:
+- Nom: ${data.ownerName}
+${data.ownerEmail ? `- Email: ${data.ownerEmail}\n` : ''}${data.ownerPhone ? `- Téléphone: ${data.ownerPhone}\n` : ''}
+DÉTAILS DU PLAN DE PAIEMENT:
+- Montant total: ${formatPrice(data.totalAmount)}
+- Nombre d'échéances: ${data.numberOfInstallments}
+- Montant par échéance: ${formatPrice(data.installmentAmount)}
+- Fréquence: ${getFrequencyLabel(data.frequency)}
+- Date de début: ${formatDate(data.startDate)}
+${paymentDueDayInfo}
+CALENDRIER DES ÉCHÉANCES:
+${installmentsList}
+
+Veuillez noter ces dates d'échéance et effectuer les paiements en temps voulu.
+
+Si vous avez des questions, n'hésitez pas à contacter ${data.ownerName}${data.ownerEmail ? ` à ${data.ownerEmail}` : ''}${data.ownerPhone ? ` ou au ${data.ownerPhone}` : ''}.
+
+Cordialement,
+L'équipe Mestoits`;
 }

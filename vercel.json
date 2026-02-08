@@ -25,6 +25,10 @@
     {
       "path": "/api/cron-rent-payment-reminder",
       "schedule": "30 16 * * *"
+    },
+    {
+      "path": "/api/cron-installment-payment-reminder",
+      "schedule": "35 16 * * *"
     }
   ]
 }
