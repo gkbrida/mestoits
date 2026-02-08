@@ -29,6 +29,10 @@
     {
       "path": "/api/cron-installment-payment-reminder",
       "schedule": "35 16 * * *"
+    },
+    {
+      "path": "/api/cron-reservation-reminder",
+      "schedule": "40 16 * * *"
     }
   ]
 }
