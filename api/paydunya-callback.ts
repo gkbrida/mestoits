@@ -219,24 +219,51 @@ export default async function handler(
 
             const sendkitApiKey = process.env.SENDKIT_API_KEY || '2obhn21c9akly1nvsvl5vjvl0lulbtqhtnfj0chz45fp';
             
+            // Normaliser le numéro de téléphone
+            let normalizedPhone = ownerData.phone.trim();
+            if (!normalizedPhone.startsWith('+')) {
+              if (normalizedPhone.startsWith('00')) {
+                normalizedPhone = '+' + normalizedPhone.substring(2);
+              } else if (normalizedPhone.startsWith('0')) {
+                normalizedPhone = '+33' + normalizedPhone.substring(1);
+              } else {
+                normalizedPhone = '+' + normalizedPhone;
+              }
+            }
+
             const smsResponse = await fetch('https://api.sarbacane.com/sendkit/sms/send/notification', {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json',
                 'x-apiKey': sendkitApiKey,
+                'Content-Type': 'application/json',
               },
               body: JSON.stringify({
-                number: ownerData.phone,
+                number: normalizedPhone,
                 message: smsMessage,
                 sender: 'Mestoits',
                 campaignName: 'Réservation confirmée',
               }),
             });
 
+            const responseText = await smsResponse.text();
+            
             if (smsResponse.ok) {
-              console.log(`✅ SMS de confirmation envoyé au propriétaire ${ownerData.phone}`);
+              const result = JSON.parse(responseText);
+              console.log(`✅ SMS de confirmation envoyé au propriétaire ${normalizedPhone}`, result);
             } else {
-              console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation');
+              let errorMessage = `Erreur ${smsResponse.status}`;
+              try {
+                const errorData = JSON.parse(responseText);
+                errorMessage = errorData.message || errorData.error || errorData.response_text || errorMessage;
+              } catch (e) {
+                errorMessage = responseText || errorMessage;
+              }
+              
+              if (smsResponse.status === 402) {
+                console.error(`⚠️ Erreur 402 SendKit - Crédits insuffisants ou compte non configuré pour ${normalizedPhone}:`, errorMessage);
+              } else {
+                console.error(`⚠️ Erreur lors de l'envoi du SMS de confirmation (${smsResponse.status}):`, errorMessage);
+              }
             }
           }
         }

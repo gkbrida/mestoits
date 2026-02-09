@@ -368,9 +368,15 @@ export default function BienDetailPage() {
                   });
 
                   if (smsResponse.ok) {
-                    console.log(`✅ SMS de confirmation envoyé au propriétaire ${ownerData.phone}`);
+                    const smsResult = await smsResponse.json();
+                    console.log(`✅ SMS de confirmation envoyé au propriétaire ${ownerData.phone}`, smsResult);
                   } else {
-                    console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation');
+                    const errorData = await smsResponse.json().catch(() => ({ error: 'Erreur inconnue' }));
+                    console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation:', {
+                      status: smsResponse.status,
+                      error: errorData.error || errorData.message,
+                      details: errorData.details
+                    });
                   }
                 }
               }

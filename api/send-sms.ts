@@ -34,7 +34,8 @@ export default async function handler(
       number, 
       message,
       sender,
-      campaignName
+      campaignName,
+      category
     } = req.body;
 
     // Validation
@@ -64,9 +65,9 @@ export default async function handler(
     console.log(`📊 Campagne: ${campaignName || 'Non spécifiée'}`);
     console.log('═══════════════════════════════════════════════════════');
 
-    // Préparer le payload pour SendKit
+    // Préparer le payload pour SendKit (format exact selon la documentation)
     const payload: any = {
-      number: number,
+      number: normalizedNumber,
       message: message
     };
 
@@ -78,12 +79,17 @@ export default async function handler(
       payload.campaignName = campaignName;
     }
 
+    if (category) {
+      payload.category = category;
+    }
+
     // Envoyer le SMS via SendKit API
+    // Format exact selon la documentation SendKit
     const sendkitResponse = await fetch('https://api.sarbacane.com/sendkit/sms/send/notification', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
         'x-apiKey': sendkitApiKey,
+        'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
     });
@@ -95,17 +101,34 @@ export default async function handler(
 
     if (!sendkitResponse.ok) {
       let errorMessage = `Erreur ${sendkitResponse.status}: ${sendkitResponse.statusText}`;
+      let errorDetails: any = {};
+      
       try {
         const errorData = JSON.parse(responseText);
-        errorMessage = errorData.message || errorData.error || errorMessage;
+        errorMessage = errorData.message || errorData.error || errorData.response_text || errorMessage;
+        errorDetails = errorData;
       } catch (e) {
-        // Utiliser le message d'erreur par défaut
+        // Si ce n'est pas du JSON, utiliser le texte brut
+        errorMessage = responseText || errorMessage;
       }
       
-      console.error('❌ Erreur SendKit:', errorMessage);
+      // Gestion spécifique de l'erreur 402 (Payment Required)
+      if (sendkitResponse.status === 402) {
+        errorMessage = 'Erreur 402 - Crédits insuffisants ou compte SendKit non configuré. Veuillez :\n1. Vérifier vos crédits SMS sur https://sendkit.sarbacane.com\n2. Vérifier que votre clé API est valide et active\n3. Recharger vos crédits si nécessaire';
+        console.error('❌ Erreur 402 SendKit - Problème de crédits ou de compte:');
+        console.error('   • Message:', errorMessage);
+        console.error('   • Détails:', errorDetails);
+        console.error('   • Numéro:', normalizedNumber);
+        console.error('   • Clé API utilisée:', sendkitApiKey.substring(0, 10) + '...');
+      } else {
+        console.error('❌ Erreur SendKit:', errorMessage, errorDetails);
+      }
+      
       return res.status(sendkitResponse.status).json({
         success: false,
-        error: errorMessage
+        error: errorMessage,
+        statusCode: sendkitResponse.status,
+        details: errorDetails
       });
     }
 

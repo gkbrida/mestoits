@@ -246,9 +246,15 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
           });
 
           if (smsResponse.ok) {
-            console.log('✅ SMS envoyé au propriétaire avec succès');
+            const smsResult = await smsResponse.json();
+            console.log('✅ SMS envoyé au propriétaire avec succès', smsResult);
           } else {
-            console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire');
+            const errorData = await smsResponse.json().catch(() => ({ error: 'Erreur inconnue' }));
+            console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire:', {
+              status: smsResponse.status,
+              error: errorData.error || errorData.message,
+              details: errorData.details
+            });
           }
         } catch (smsError) {
           console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire:', smsError);
