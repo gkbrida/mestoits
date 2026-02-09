@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 export default function InscriptionPage() {
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
@@ -16,12 +17,24 @@ export default function InscriptionPage() {
     phone: '',
     password: '',
     confirmPassword: '',
+    affiliationCode: '',
     companyName: '',
     siret: '',
     professionalCard: '',
     companyAddress: '',
     city: '',
   });
+
+  // Charger le code d'affiliation depuis l'URL si présent
+  useEffect(() => {
+    const affiliationCode = searchParams.get('affiliation');
+    if (affiliationCode) {
+      setFormData(prev => ({
+        ...prev,
+        affiliationCode: affiliationCode.toUpperCase()
+      }));
+    }
+  }, [searchParams]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({
@@ -383,6 +396,25 @@ export default function InscriptionPage() {
               </div>
             </div>
           )}
+
+          {/* Code d'affiliation */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Code d'affiliation (optionnel)
+            </label>
+            <input
+              type="text"
+              name="affiliationCode"
+              value={formData.affiliationCode}
+              onChange={handleChange}
+              className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent uppercase"
+              placeholder="ABC12345"
+              maxLength={20}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Si vous avez reçu un code d'affiliation, saisissez-le ici
+            </p>
+          </div>
 
           <button
             type="submit"

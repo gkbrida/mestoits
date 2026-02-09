@@ -4,11 +4,14 @@ import { useAdminAuth } from '../../../contexts/AdminAuthContext';
 import StatisticsTab from '../components/StatisticsTab';
 import UsersManagementTab from '../components/UsersManagementTab';
 import PropertiesManagementTab from '../components/PropertiesManagementTab';
+import SubscriptionsTab from '../components/SubscriptionsTab';
+import CommissionsTab from '../components/CommissionsTab';
+import SettingsTab from '../components/SettingsTab';
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
   const { admin, logout, isAuthenticated, isLoading } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState<'statistics' | 'users' | 'properties'>('statistics');
+  const [activeTab, setActiveTab] = useState<'statistics' | 'users' | 'properties' | 'subscriptions' | 'commissions' | 'settings'>('statistics');
 
   // Rediriger vers la page de connexion si non authentifié
   if (!isLoading && !isAuthenticated) {
@@ -102,6 +105,39 @@ export default function AdminDashboardPage() {
                 <i className="ri-home-line mr-2"></i>
                 Gestion des annonces
               </button>
+              <button
+                onClick={() => setActiveTab('subscriptions')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'subscriptions'
+                    ? 'border-teal-500 text-teal-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <i className="ri-vip-crown-line mr-2"></i>
+                Abonnements
+              </button>
+              <button
+                onClick={() => setActiveTab('commissions')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'commissions'
+                    ? 'border-teal-500 text-teal-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <i className="ri-money-dollar-circle-line mr-2"></i>
+                Commissions
+              </button>
+              <button
+                onClick={() => setActiveTab('settings')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'settings'
+                    ? 'border-teal-500 text-teal-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <i className="ri-settings-3-line mr-2"></i>
+                Paramètres
+              </button>
             </nav>
           </div>
         </div>
@@ -111,6 +147,9 @@ export default function AdminDashboardPage() {
           {activeTab === 'statistics' && <StatisticsTab />}
           {activeTab === 'users' && <UsersManagementTab />}
           {activeTab === 'properties' && <PropertiesManagementTab />}
+          {activeTab === 'subscriptions' && <SubscriptionsTab />}
+          {activeTab === 'commissions' && <CommissionsTab />}
+          {activeTab === 'settings' && <SettingsTab />}
         </div>
       </div>
     </div>

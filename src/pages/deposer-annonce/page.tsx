@@ -819,6 +819,16 @@ export default function DeposerAnnoncePage() {
 
       if (error) throw error;
 
+      // Enregistrer la publication pour les restrictions
+      if (data) {
+        try {
+          const { recordPropertyPublication } = await import('../../utils/subscriptionUtils');
+          await recordPropertyPublication(user.id, data.id);
+        } catch (error) {
+          console.error('Erreur lors de l\'enregistrement de la publication:', error);
+        }
+      }
+
       // Rediriger vers la page du bien ou la gestion locative
       if (data) {
         navigate(`/bien/${data.id}`);

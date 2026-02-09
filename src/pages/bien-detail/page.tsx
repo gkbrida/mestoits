@@ -316,6 +316,30 @@ export default function BienDetailPage() {
             alert('Le paiement a été effectué mais une erreur est survenue lors de la mise à jour de la réservation. Veuillez contacter le support.');
           } else {
             console.log('✅ Réservation mise à jour avec succès');
+
+            // Traiter la commission
+            try {
+              const { processCommission } = await import('../../utils/commissionUtils');
+              const { data: reservationData } = await supabase
+                .from('reservations')
+                .select('total_amount, guest_email')
+                .eq('id', reservationId)
+                .single();
+
+              if (reservationData) {
+                const { data: { user } } = await supabase.auth.getUser();
+                await processCommission(
+                  'reservation',
+                  reservationId,
+                  user?.id || null,
+                  parseFloat(reservationData.total_amount)
+                );
+              }
+            } catch (commissionError) {
+              console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+              // Ne pas bloquer le processus si la commission échoue
+            }
+
             alert('✅ Réservation confirmée ! Votre paiement a été effectué avec succès.');
 
             // Envoyer un email au propriétaire pour l'informer de la confirmation de la réservation

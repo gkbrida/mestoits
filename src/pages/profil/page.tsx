@@ -103,6 +103,28 @@ export default function ProfilPage() {
               {activeTab === 'security' && <SecurityTab />}
             </div>
           </div>
+
+          {/* Bouton Devenir partenaire */}
+          <div className="mt-6 bg-gradient-to-r from-teal-500 to-teal-600 rounded-xl md:rounded-2xl shadow-sm border border-teal-600 p-6 md:p-8">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-white mb-2">
+                  <i className="ri-gift-line mr-2"></i>
+                  Programme d'affiliation
+                </h3>
+                <p className="text-teal-50 text-sm sm:text-base">
+                  Partagez votre code d'affiliation et gagnez des avantages en invitant vos contacts à rejoindre la plateforme.
+                </p>
+              </div>
+              <button
+                onClick={() => navigate('/affiliation')}
+                className="px-6 py-3 bg-white text-teal-600 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap flex items-center gap-2"
+              >
+                <i className="ri-arrow-right-line"></i>
+                Devenir partenaire
+              </button>
+            </div>
+          </div>
         </div>
       </main>
 

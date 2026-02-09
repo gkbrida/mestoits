@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import { canUserAccessRentalManagement } from '../../utils/subscriptionUtils';
 
 import Navbar from '../../components/feature/Navbar';
 import Footer from '../../components/feature/Footer';
@@ -12,14 +13,47 @@ import LeasesTab from './components/LeasesTab';
 
 export default function RentalManagementPage() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
+
+  const checkUser = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+    } catch (error) {
+      console.error('Erreur lors de la vérification de l\'utilisateur:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const checkAccess = async () => {
+    if (!user) return;
+    
+    try {
+      const canAccess = await canUserAccessRentalManagement(user.id);
+      setAccessDenied(!canAccess);
+    } catch (error) {
+      console.error('Erreur lors de la vérification de l\'accès:', error);
+      // En cas d'erreur, autoriser l'accès pour ne pas bloquer l'utilisateur
+      setAccessDenied(false);
+    }
+  };
 
   useEffect(() => {
     checkUser();
   }, []);
+
+  useEffect(() => {
+    if (user) {
+      checkAccess();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   // Lire les paramètres d'URL pour déterminer l'onglet actif
   useEffect(() => {
@@ -36,17 +70,6 @@ export default function RentalManagementPage() {
     }
   }, [searchParams]);
 
-  const checkUser = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUser(user);
-    } catch (error) {
-      console.error('Erreur lors de la vérification de l\'utilisateur:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const tabs = [
     { id: 'dashboard', label: 'Tableau de bord', icon: 'ri-dashboard-line' },
     { id: 'properties', label: 'Biens', icon: 'ri-building-line' },
@@ -61,6 +84,43 @@ export default function RentalManagementPage() {
           <i className="ri-loader-4-line text-5xl text-teal-600 animate-spin"></i>
           <p className="mt-4 text-gray-600">Chargement...</p>
         </div>
+      </div>
+    );
+  }
+
+  // Si accès refusé
+  if (user && accessDenied) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navbar onMenuToggle={() => setIsMenuOpen(true)} />
+        <SideMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
+        
+        <div className="pt-16 md:pt-24 pb-12 md:pb-20">
+          <div className="max-w-[1600px] mx-auto px-4 md:px-6">
+            <div className="flex flex-col items-center justify-center" style={{ minHeight: 'calc(100vh - 300px)' }}>
+              <div className="bg-white rounded-xl md:rounded-2xl shadow-lg p-6 md:p-8 lg:p-12 max-w-[600px] w-full text-center">
+                <div className="w-16 h-16 md:w-20 md:h-20 bg-orange-100 rounded-full flex items-center justify-center mx-auto mb-4 md:mb-6">
+                  <i className="ri-shield-cross-line text-3xl md:text-4xl text-orange-600 w-8 h-8 md:w-10 md:h-10 flex items-center justify-center"></i>
+                </div>
+                <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-3 md:mb-4">Accès restreint</h2>
+                <p className="text-gray-600 text-sm md:text-base lg:text-lg mb-6 md:mb-8">
+                  L'accès à la gestion locative nécessite un abonnement approprié. Veuillez mettre à niveau votre plan pour accéder à cette fonctionnalité.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3 md:gap-4 justify-center">
+                  <button
+                    onClick={() => navigate('/profil')}
+                    className="flex items-center justify-center gap-2 px-6 md:px-8 py-3 md:py-4 bg-teal-600 text-white rounded-lg md:rounded-xl text-sm md:text-base font-semibold hover:bg-teal-700 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <i className="ri-vip-crown-line text-lg md:text-xl"></i>
+                    <span>Voir les abonnements</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <Footer />
       </div>
     );
   }

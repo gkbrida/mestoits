@@ -96,6 +96,30 @@ export default function MesPaiementsEchelonnesPage() {
             alert('Le paiement a été effectué mais une erreur est survenue lors de la mise à jour. Veuillez contacter le support.');
           } else {
             console.log('✅ Paiement échelonné mis à jour avec succès');
+
+            // Traiter la commission
+            try {
+              const { processCommission } = await import('../../utils/commissionUtils');
+              const { data: paymentData } = await supabase
+                .from('installment_payments')
+                .select('amount')
+                .eq('id', paymentId)
+                .single();
+
+              if (paymentData) {
+                const { data: { user } } = await supabase.auth.getUser();
+                await processCommission(
+                  'installment_payment',
+                  paymentId,
+                  user?.id || null,
+                  parseFloat(paymentData.amount)
+                );
+              }
+            } catch (commissionError) {
+              console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+              // Ne pas bloquer le processus si la commission échoue
+            }
+
             alert('✅ Paiement effectué avec succès !');
             // Recharger les plans pour mettre à jour l'affichage
             await loadPlans();

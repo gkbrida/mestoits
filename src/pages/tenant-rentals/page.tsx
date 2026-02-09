@@ -148,6 +148,23 @@ export default function TenantRentalsPage() {
       console.log('   • Statut actuel:', paymentData.status);
       console.log('   • Date d\'échéance:', paymentData.due_date);
 
+      // Traiter la commission si le paiement est confirmé
+      if (status === 'paid') {
+        try {
+          const { processCommission } = await import('../../utils/commissionUtils');
+          const { data: { user } } = await supabase.auth.getUser();
+          await processCommission(
+            'rent_payment',
+            paymentId,
+            user?.id || null,
+            parseFloat(paymentData.amount)
+          );
+        } catch (commissionError) {
+          console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+          // Ne pas bloquer le processus si la commission échoue
+        }
+      }
+
       // Récupérer les informations du bail
       console.log('📥 Récupération du bail depuis Supabase...');
       console.log('   • Lease ID:', paymentData.lease_id);

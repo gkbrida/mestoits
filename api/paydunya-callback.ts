@@ -180,6 +180,34 @@ export default async function handler(
 
       console.log(`✅ Réservation ${reservationId} mise à jour avec succès`);
 
+      // Traiter la commission
+      try {
+        const { data: reservationData } = await supabaseAdmin
+          .from('reservations')
+          .select('total_amount, guest_email')
+          .eq('id', reservationId)
+          .single();
+
+        if (reservationData) {
+          const { data: guestUser } = await supabaseAdmin
+            .from('users_2025_12_01_11_29')
+            .select('id')
+            .eq('email', reservationData.guest_email)
+            .maybeSingle();
+
+          const { processCommission } = await import('./utils/commissionHandler');
+          await processCommission(
+            'reservation',
+            reservationId,
+            guestUser?.id || null,
+            parseFloat(reservationData.total_amount)
+          );
+        }
+      } catch (commissionError) {
+        console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+        // Ne pas bloquer le callback si la commission échoue
+      }
+
       // Envoyer un email au propriétaire pour l'informer de la confirmation de la réservation
       try {
         // Récupérer les informations de la réservation et du propriétaire
@@ -344,6 +372,35 @@ L'équipe Mestoits`;
         }
 
         console.log(`✅ Paiement échelonné ${paymentId} mis à jour avec succès`);
+
+        // Traiter la commission
+        try {
+          const { data: paymentData } = await supabaseAdmin
+            .from('installment_payments')
+            .select('amount, installment_plan_id')
+            .eq('id', paymentId)
+            .single();
+
+          if (paymentData) {
+            const { data: planData } = await supabaseAdmin
+              .from('installment_plans')
+              .select('tenant_id')
+              .eq('id', paymentData.installment_plan_id)
+              .single();
+
+            const { processCommission } = await import('./utils/commissionHandler');
+            await processCommission(
+              'installment_payment',
+              paymentId,
+              planData?.tenant_id || null,
+              parseFloat(paymentData.amount)
+            );
+          }
+        } catch (commissionError) {
+          console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+          // Ne pas bloquer le callback si la commission échoue
+        }
+
         return res.status(200).json({
           success: true,
           message: 'Paiement échelonné mis à jour avec succès'
@@ -371,6 +428,29 @@ L'équipe Mestoits`;
         }
 
         console.log(`✅ Paiement ${paymentId} mis à jour avec succès`);
+
+        // Traiter la commission
+        try {
+          const { data: paymentData } = await supabaseAdmin
+            .from('payments')
+            .select('amount, tenant_id')
+            .eq('id', paymentId)
+            .single();
+
+          if (paymentData) {
+            const { processCommission } = await import('./utils/commissionHandler');
+            await processCommission(
+              'rent_payment',
+              paymentId,
+              paymentData.tenant_id || null,
+              parseFloat(paymentData.amount)
+            );
+          }
+        } catch (commissionError) {
+          console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+          // Ne pas bloquer le callback si la commission échoue
+        }
+
         return res.status(200).json({
           success: true,
           message: 'Paiement mis à jour avec succès'

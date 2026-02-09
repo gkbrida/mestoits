@@ -90,10 +90,23 @@ export default async function handler(
       admin: adminData,
     });
   } catch (error: any) {
-    console.error('Erreur lors de la connexion admin:', error);
+    console.error('❌ Erreur lors de la connexion admin:', error);
+    console.error('   • Message:', error.message);
+    console.error('   • Stack:', error.stack);
+    
+    // Messages d'erreur plus détaillés
+    let errorMessage = error.message || 'Une erreur est survenue lors de la connexion';
+    
+    if (error.message?.includes('Variables d\'environnement')) {
+      errorMessage = 'Configuration serveur incomplète. Vérifiez les variables d\'environnement SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY.';
+    } else if (error.message?.includes('relation "admins" does not exist')) {
+      errorMessage = 'La table admins n\'existe pas. Veuillez exécuter la migration migration-create-admin-system.sql dans Supabase.';
+    }
+    
     return res.status(500).json({
       success: false,
-      error: error.message || 'Une erreur est survenue lors de la connexion',
+      error: errorMessage,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 }
