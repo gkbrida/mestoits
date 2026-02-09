@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
+import { useEmail } from '../../../hooks/useEmail';
 import DateRangeCalendar from './DateRangeCalendar';
 
 interface ReservationFormProps {
@@ -12,6 +13,7 @@ interface ReservationFormProps {
 
 export default function ReservationForm({ propertyId, price, propertyTitle, ownerId }: ReservationFormProps) {
   const navigate = useNavigate();
+  const { sendEmail } = useEmail();
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -211,17 +213,16 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
         throw new Error(`Erreur lors de la création de la réservation: ${reservationError.message}`);
       }
 
-      // Récupérer les informations du propriétaire pour l'envoi de SMS
-      const { data: ownerData } = await supabase
-        .from('users_2025_12_01_11_29')
-        .select('full_name, email, phone')
-        .eq('id', finalOwnerId)
-        .single();
+      // Envoyer un email au propriétaire pour l'informer de la nouvelle réservation
+      try {
+        // Récupérer les informations du propriétaire
+        const { data: ownerData } = await supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name, email, phone')
+          .eq('id', finalOwnerId)
+          .single();
 
-      // Envoyer un SMS au propriétaire pour l'informer de la nouvelle réservation
-      if (ownerData?.phone) {
-        try {
-          const EMAIL_API_URL = import.meta.env.VITE_EMAIL_API_URL || '/api';
+        if (ownerData?.email) {
           const formatDate = (dateString: string) => {
             return new Date(dateString).toLocaleDateString('fr-FR', {
               day: 'numeric',
@@ -230,36 +231,39 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
             });
           };
 
-          const smsMessage = `Nouvelle réservation pour "${propertyTitle || 'votre bien'}": ${userData.full_name || 'Client'} du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuit${nights > 1 ? 's' : ''}). Montant: ${formatPrice(totalAmount)} FCFA.`;
+          const reservationMessage = `Bonjour ${ownerData.full_name || 'Propriétaire'},
 
-          const smsResponse = await fetch(`${EMAIL_API_URL}/send-sms`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              number: ownerData.phone,
-              message: smsMessage,
-              sender: 'Mestoits',
-              campaignName: 'Nouvelle réservation',
-            }),
+Une nouvelle réservation a été effectuée pour votre bien "${propertyTitle || 'Bien immobilier'}".
+
+Détails de la réservation :
+- Client : ${userData.full_name || 'Client'}
+- Email : ${userData.email}
+${userData.phone ? `- Téléphone : ${userData.phone}` : ''}
+- Dates : Du ${formatDate(startDate)} au ${formatDate(endDate)}
+- Nombre de nuits : ${nights}
+- Montant total : ${formatPrice(totalAmount)} FCFA
+- Statut : En attente de paiement
+
+La réservation sera confirmée une fois le paiement effectué.
+
+Cordialement,
+L'équipe Mestoits`;
+
+          await sendEmail('contact_annonce', {
+            receiverEmail: ownerData.email,
+            receiverName: ownerData.full_name || 'Propriétaire',
+            senderName: userData.full_name || 'Client',
+            senderEmail: userData.email,
+            senderPhone: userData.phone,
+            propertyTitle: propertyTitle || 'Bien immobilier',
+            propertyId: propertyId,
+            message: reservationMessage,
+            appUrl: window.location.origin,
           });
-
-          if (smsResponse.ok) {
-            const smsResult = await smsResponse.json();
-            console.log('✅ SMS envoyé au propriétaire avec succès', smsResult);
-          } else {
-            const errorData = await smsResponse.json().catch(() => ({ error: 'Erreur inconnue' }));
-            console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire:', {
-              status: smsResponse.status,
-              error: errorData.error || errorData.message,
-              details: errorData.details
-            });
-          }
-        } catch (smsError) {
-          console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire:', smsError);
-          // Ne pas bloquer la réservation si l'envoi de SMS échoue
         }
+      } catch (emailError) {
+        console.error('⚠️ Erreur lors de l\'envoi de l\'email au propriétaire:', emailError);
+        // Ne pas bloquer la réservation si l'email échoue
       }
 
       // Stocker les données de réservation et ouvrir le modal de paiement

@@ -5,6 +5,7 @@ import { usePropertiesCache } from '../../contexts/PropertiesCacheContext';
 import type { Property } from '../../contexts/PropertiesCacheContext';
 import { usePropertyTypes } from '../../hooks/usePropertyTypes';
 import { useOperationTypes } from '../../hooks/useOperationTypes';
+import { useEmail } from '../../hooks/useEmail';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
@@ -279,6 +280,7 @@ export default function BienDetailPage() {
   const { getProperty, setProperty: setCachedProperty } = usePropertiesCache();
   const { getPropertyTypeLabel } = usePropertyTypes();
   const { getOperationTypeLabel } = useOperationTypes();
+  const { sendEmail } = useEmail();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [property, setProperty] = useState<Property | null>(null);
   const [loading, setLoading] = useState(true);
@@ -316,19 +318,19 @@ export default function BienDetailPage() {
             console.log('✅ Réservation mise à jour avec succès');
             alert('✅ Réservation confirmée ! Votre paiement a été effectué avec succès.');
 
-            // Envoyer un SMS au propriétaire pour l'informer de la confirmation de la réservation
+            // Envoyer un email au propriétaire pour l'informer de la confirmation de la réservation
             try {
               // Récupérer les informations de la réservation et du propriétaire
               const { data: reservationData } = await supabase
                 .from('reservations')
-                .select('property_id, guest_name, start_date, end_date, nights, total_amount, owner_id')
+                .select('property_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount, owner_id')
                 .eq('id', reservationId)
                 .single();
 
               if (reservationData) {
                 const { data: ownerData } = await supabase
                   .from('users_2025_12_01_11_29')
-                  .select('phone, full_name')
+                  .select('full_name, email, phone')
                   .eq('id', reservationData.owner_id)
                   .single();
 
@@ -338,7 +340,7 @@ export default function BienDetailPage() {
                   .eq('id', reservationData.property_id)
                   .single();
 
-                if (ownerData?.phone) {
+                if (ownerData?.email) {
                   const formatDate = (dateString: string) => {
                     return new Date(dateString).toLocaleDateString('fr-FR', {
                       day: 'numeric',
@@ -351,38 +353,40 @@ export default function BienDetailPage() {
                     return new Intl.NumberFormat('fr-FR').format(amount);
                   };
 
-                  const smsMessage = `Réservation confirmée pour "${propertyData?.title || 'votre bien'}": ${reservationData.guest_name} du ${formatDate(reservationData.start_date)} au ${formatDate(reservationData.end_date)} (${reservationData.nights} nuit${reservationData.nights > 1 ? 's' : ''}). Montant: ${formatPrice(parseFloat(reservationData.total_amount))} FCFA.`;
+                  const confirmationMessage = `Bonjour ${ownerData.full_name || 'Propriétaire'},
 
-                  const EMAIL_API_URL = import.meta.env.VITE_EMAIL_API_URL || '/api';
-                  const smsResponse = await fetch(`${EMAIL_API_URL}/send-sms`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                      number: ownerData.phone,
-                      message: smsMessage,
-                      sender: 'Mestoits',
-                      campaignName: 'Réservation confirmée',
-                    }),
+La réservation pour votre bien "${propertyData?.title || 'Bien immobilier'}" a été confirmée suite au paiement effectué.
+
+Détails de la réservation confirmée :
+- Client : ${reservationData.guest_name}
+- Email : ${reservationData.guest_email}
+${reservationData.guest_phone ? `- Téléphone : ${reservationData.guest_phone}` : ''}
+- Dates : Du ${formatDate(reservationData.start_date)} au ${formatDate(reservationData.end_date)}
+- Nombre de nuits : ${reservationData.nights}
+- Montant total : ${formatPrice(parseFloat(reservationData.total_amount))} FCFA
+- Statut : Confirmée
+
+La réservation est maintenant confirmée et le paiement a été reçu.
+
+Cordialement,
+L'équipe Mestoits`;
+
+                  await sendEmail('contact_annonce', {
+                    receiverEmail: ownerData.email,
+                    receiverName: ownerData.full_name || 'Propriétaire',
+                    senderName: reservationData.guest_name,
+                    senderEmail: reservationData.guest_email,
+                    senderPhone: reservationData.guest_phone,
+                    propertyTitle: propertyData?.title || 'Bien immobilier',
+                    propertyId: reservationData.property_id,
+                    message: confirmationMessage,
+                    appUrl: window.location.origin,
                   });
-
-                  if (smsResponse.ok) {
-                    const smsResult = await smsResponse.json();
-                    console.log(`✅ SMS de confirmation envoyé au propriétaire ${ownerData.phone}`, smsResult);
-                  } else {
-                    const errorData = await smsResponse.json().catch(() => ({ error: 'Erreur inconnue' }));
-                    console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation:', {
-                      status: smsResponse.status,
-                      error: errorData.error || errorData.message,
-                      details: errorData.details
-                    });
-                  }
                 }
               }
-            } catch (smsError) {
-              console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation:', smsError);
-              // Ne pas bloquer le processus si l'envoi de SMS échoue
+            } catch (emailError) {
+              console.error('⚠️ Erreur lors de l\'envoi de l\'email de confirmation au propriétaire:', emailError);
+              // Ne pas bloquer le processus si l'email échoue
             }
           }
         } catch (error) {
