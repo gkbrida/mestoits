@@ -94,8 +94,8 @@ export default async function handler(
     console.log(`📋 Reservation ID: ${reservationId || 'NON FOURNI'}`);
 
     // Construire les URLs de retour
-    const successUrl = `${origin}/mes-locations?payment=success&reservation=${reservationId || ''}&property=${propertyId}&method=paydunya`;
-    const cancelUrl = `${origin}/mes-locations?payment=cancelled&reservation=${reservationId || ''}&property=${propertyId}&method=paydunya`;
+    const successUrl = `${origin}/bien/${propertyId}?payment=success&reservation=${reservationId || ''}&method=paydunya`;
+    const cancelUrl = `${origin}/bien/${propertyId}?payment=cancelled&reservation=${reservationId || ''}&method=paydunya`;
     const callbackUrl = `${origin}/api/paydunya-callback`;
 
     console.log(`✅ Success URL: ${successUrl}`);

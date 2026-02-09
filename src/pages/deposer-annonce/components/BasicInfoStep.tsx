@@ -213,34 +213,36 @@ export default function BasicInfoStep({ data, onUpdate, onValidationChange }: Ba
             </div>
           </div>
           
-          {/* Prix négociable */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs md:text-sm text-gray-700">Prix négociable ?</span>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => onUpdate({ price_negotiable: true })}
-                className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
-                  data.price_negotiable === true
-                    ? 'bg-teal-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Oui
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdate({ price_negotiable: false })}
-                className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
-                  data.price_negotiable === false
-                    ? 'bg-teal-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Non
-              </button>
+          {/* Prix négociable - Masqué pour location courte durée */}
+          {(data.operation_type !== 'short-term-rental') && (
+            <div className="flex items-center gap-3">
+              <span className="text-xs md:text-sm text-gray-700">Prix négociable ?</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onUpdate({ price_negotiable: true })}
+                  className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
+                    data.price_negotiable === true
+                      ? 'bg-teal-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Oui
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onUpdate({ price_negotiable: false })}
+                  className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
+                    data.price_negotiable === false
+                      ? 'bg-teal-600 text-white'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  Non
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 

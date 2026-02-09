@@ -339,36 +339,38 @@ export default function PropertyDetailsStep({ data, onUpdate, onValidationChange
               </div>
             )}
 
-            {/* Cuisine Fermée */}
-            <div className="mt-3 md:mt-4">
-              <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-2">
-                Cuisine Fermée
-              </label>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => onUpdate({ kitchen_closed: true })}
-                  className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
-                    data.kitchen_closed === true
-                      ? 'bg-teal-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Oui
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onUpdate({ kitchen_closed: false })}
-                  className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
-                    data.kitchen_closed === false
-                      ? 'bg-teal-600 text-white'
-                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                  }`}
-                >
-                  Non
-                </button>
+            {/* Cuisine Fermée - Masquée pour location courte durée */}
+            {data.operation_type !== 'short-term-rental' && (
+              <div className="mt-3 md:mt-4">
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-2">
+                  Cuisine Fermée
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onUpdate({ kitchen_closed: true })}
+                    className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
+                      data.kitchen_closed === true
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Oui
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdate({ kitchen_closed: false })}
+                    className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium transition-all ${
+                      data.kitchen_closed === false
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Non
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Balcon (si appartement) */}
             {isApartment && (

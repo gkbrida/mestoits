@@ -17,8 +17,16 @@ export default function PaymentResult({ status, onClose }: PaymentResultProps) {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          // Utiliser window.location pour forcer le rechargement complet de la page
-          const redirectUrl = window.location.origin + '/mes-locations';
+          // Détecter la page actuelle pour rediriger vers la bonne page
+          const currentPath = window.location.pathname;
+          let redirectUrl = window.location.origin + '/mes-locations';
+          
+          if (currentPath.includes('mes-paiements-echelonnes')) {
+            redirectUrl = window.location.origin + '/mes-paiements-echelonnes';
+          } else if (currentPath.includes('mes-reservations')) {
+            redirectUrl = window.location.origin + '/mes-reservations';
+          }
+          
           console.log('🔄 Redirection vers:', redirectUrl);
           window.location.href = redirectUrl;
           return 0;
@@ -77,13 +85,33 @@ export default function PaymentResult({ status, onClose }: PaymentResultProps) {
         {/* Bouton pour rediriger immédiatement */}
         <button
           onClick={() => {
-            const redirectUrl = window.location.origin + '/mes-locations';
+            // Détecter la page actuelle pour rediriger vers la bonne page
+            const currentPath = window.location.pathname;
+            let redirectUrl = window.location.origin + '/mes-locations';
+            let buttonText = 'Retour à mes locations';
+            
+            if (currentPath.includes('mes-paiements-echelonnes')) {
+              redirectUrl = window.location.origin + '/mes-paiements-echelonnes';
+              buttonText = 'Retour à mes paiements échelonnés';
+            } else if (currentPath.includes('mes-reservations')) {
+              redirectUrl = window.location.origin + '/mes-reservations';
+              buttonText = 'Retour à mes réservations';
+            }
+            
             console.log('🔄 Redirection manuelle vers:', redirectUrl);
             window.location.href = redirectUrl;
           }}
           className="w-full px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-sm sm:text-base font-semibold hover:shadow-lg transition-all cursor-pointer"
         >
-          Retour à mes locations
+          {(() => {
+            const currentPath = window.location.pathname;
+            if (currentPath.includes('mes-paiements-echelonnes')) {
+              return 'Retour à mes paiements échelonnés';
+            } else if (currentPath.includes('mes-reservations')) {
+              return 'Retour à mes réservations';
+            }
+            return 'Retour à mes locations';
+          })()}
         </button>
       </div>
     </div>

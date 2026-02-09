@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useLocation } from 'react-router-dom';
+import { useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { usePropertiesCache } from '../../contexts/PropertiesCacheContext';
 import type { Property } from '../../contexts/PropertiesCacheContext';
@@ -275,6 +275,7 @@ function CharacteristicsSection({ property, conditionLabels, standingLabels, get
 export default function BienDetailPage() {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { getProperty, setProperty: setCachedProperty } = usePropertiesCache();
   const { getPropertyTypeLabel } = usePropertyTypes();
   const { getOperationTypeLabel } = useOperationTypes();
@@ -287,6 +288,54 @@ export default function BienDetailPage() {
   const [showStickyButton, setShowStickyButton] = useState(true);
   const reservationFormRef = useRef<HTMLDivElement>(null);
   const contactFormRef = useRef<HTMLDivElement>(null);
+
+  // Gérer le retour après paiement Stripe pour les réservations
+  useEffect(() => {
+    const paymentStatus = searchParams.get('payment');
+    const reservationId = searchParams.get('reservation');
+
+    if (paymentStatus === 'success' && reservationId) {
+      console.log('✅ PAIEMENT RÉSERVATION RÉUSSI DÉTECTÉ');
+      console.log('📝 Détails de la réservation:');
+      console.log('   • Reservation ID:', reservationId);
+      
+      // Mettre à jour le statut de la réservation dans la base de données
+      (async () => {
+        try {
+          const { error: updateError } = await supabase
+            .from('reservations')
+            .update({
+              status: 'confirmed',
+            })
+            .eq('id', reservationId);
+
+          if (updateError) {
+            console.error('❌ Erreur lors de la mise à jour de la réservation:', updateError);
+            alert('Le paiement a été effectué mais une erreur est survenue lors de la mise à jour de la réservation. Veuillez contacter le support.');
+          } else {
+            console.log('✅ Réservation mise à jour avec succès');
+            alert('✅ Réservation confirmée ! Votre paiement a été effectué avec succès.');
+          }
+        } catch (error) {
+          console.error('❌ Erreur lors de la mise à jour de la réservation:', error);
+          alert('Le paiement a été effectué mais une erreur est survenue lors de la mise à jour. Veuillez contacter le support.');
+        }
+      })();
+
+      // Nettoyer les paramètres d'URL après un court délai
+      setTimeout(() => {
+        setSearchParams({});
+      }, 100);
+    } else if (paymentStatus === 'cancelled' && reservationId) {
+      console.log('❌ PAIEMENT RÉSERVATION ANNULÉ');
+      alert('Le paiement a été annulé. Vous pouvez réessayer à tout moment.');
+      
+      // Nettoyer les paramètres d'URL après un court délai
+      setTimeout(() => {
+        setSearchParams({});
+      }, 100);
+    }
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (id) {

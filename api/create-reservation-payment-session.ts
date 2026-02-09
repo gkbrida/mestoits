@@ -33,20 +33,22 @@ export default async function handler(
   try {
     const { 
       amount, 
-      month, 
+      propertyId,
       propertyTitle, 
-      tenantEmail, 
-      tenantName, 
-      leaseId,
-      paymentId,
+      guestEmail, 
+      guestName, 
+      startDate,
+      endDate,
+      nights,
+      reservationId,
       origin 
     } = req.body;
 
     // Validation
-    if (!amount || !month || !propertyTitle || !tenantEmail || !leaseId || !origin) {
+    if (!amount || !propertyId || !propertyTitle || !guestEmail || !startDate || !endDate || !nights || !origin) {
       return res.status(400).json({
         success: false,
-        error: "Paramètres manquants: amount, month, propertyTitle, tenantEmail, leaseId et origin sont requis"
+        error: "Paramètres manquants: amount, propertyId, propertyTitle, guestEmail, startDate, endDate, nights et origin sont requis"
       });
     }
 
@@ -78,61 +80,26 @@ export default async function handler(
     }
 
     console.log('═══════════════════════════════════════════════════════');
-    console.log('💳 CRÉATION D\'UNE SESSION DE PAIEMENT STRIPE');
+    console.log('💳 CRÉATION D\'UNE SESSION DE PAIEMENT STRIPE POUR RÉSERVATION');
     console.log('═══════════════════════════════════════════════════════');
-    console.log(`📧 Locataire: ${tenantEmail}`);
-    console.log(`💰 Montant: ${amountNumber} € - Période: ${month}`);
-    console.log(`📊 Montant original reçu: ${amount} (type: ${typeof amount})`);
+    console.log(`📧 Client: ${guestEmail}`);
+    console.log(`💰 Montant: ${amountNumber} €`);
+    console.log(`📅 Dates: ${startDate} au ${endDate} (${nights} nuits)`);
     console.log(`🌐 Origin reçu: ${origin}`);
     console.log(`🏠 Propriété: ${propertyTitle}`);
-    console.log(`📋 Lease ID: ${leaseId}`);
-    console.log(`💳 Payment ID: ${paymentId || 'NON FOURNI'}`);
+    console.log(`📋 Property ID: ${propertyId}`);
+    console.log(`📋 Reservation ID: ${reservationId || 'NON FOURNI'}`);
     
-    if (!paymentId) {
-      console.warn('⚠️ ATTENTION: paymentId non fourni! Le paiement ne pourra pas être mis à jour automatiquement.');
+    if (!reservationId) {
+      console.warn('⚠️ ATTENTION: reservationId non fourni! La réservation ne pourra pas être mise à jour automatiquement.');
     }
 
-    // Vérifier si c'est un paiement échelonné en vérifiant si le paymentId existe dans installment_payments
-    let isInstallmentPayment = false;
-    if (paymentId) {
-      try {
-        const { createClient } = await import('@supabase/supabase-js');
-        const supabaseUrl = process.env.SUPABASE_URL;
-        const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-        
-        if (supabaseUrl && supabaseServiceRoleKey) {
-          const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
-            auth: {
-              autoRefreshToken: false,
-              persistSession: false,
-            },
-          });
-          
-          const { data: installmentPayment } = await supabaseAdmin
-            .from('installment_payments')
-            .select('id')
-            .eq('id', paymentId)
-            .maybeSingle();
-          
-          isInstallmentPayment = !!installmentPayment;
-        }
-      } catch (error) {
-        console.warn('⚠️ Erreur lors de la vérification du type de paiement:', error);
-        // Continuer avec le comportement par défaut (paiement de loyer)
-      }
-    }
-
-    // Construire les URLs de retour selon le type de paiement
-    const successUrl = isInstallmentPayment
-      ? `${origin}/mes-paiements-echelonnes?payment=success&paymentId=${paymentId || ''}&lease=${leaseId || ''}`
-      : `${origin}/mes-locations?payment=success&lease=${leaseId}&paymentId=${paymentId || ''}`;
-    const cancelUrl = isInstallmentPayment
-      ? `${origin}/mes-paiements-echelonnes?payment=cancelled&lease=${leaseId || ''}`
-      : `${origin}/mes-locations?payment=cancelled&lease=${leaseId}`;
+    // Construire les URLs de retour
+    const successUrl = `${origin}/bien/${propertyId}?payment=success&reservation=${reservationId || ''}`;
+    const cancelUrl = `${origin}/bien/${propertyId}?payment=cancelled&reservation=${reservationId || ''}`;
     
     console.log(`✅ Success URL: ${successUrl}`);
     console.log(`❌ Cancel URL: ${cancelUrl}`);
-    console.log(`📊 Type de paiement: ${isInstallmentPayment ? 'Échelonné' : 'Loyer'}`);
     console.log('═══════════════════════════════════════════════════════');
 
     // Créer une session de paiement Stripe
@@ -143,8 +110,8 @@ export default async function handler(
           price_data: {
             currency: 'eur',
             product_data: {
-              name: `Loyer ${month}`,
-              description: `Paiement du loyer pour ${propertyTitle}`,
+              name: `Réservation - ${propertyTitle}`,
+              description: `Réservation du ${startDate} au ${endDate} (${nights} nuit${nights > 1 ? 's' : ''})`,
             },
             unit_amount: Math.round(amountNumber * 100), // Montant en centimes
           },
@@ -154,14 +121,16 @@ export default async function handler(
       mode: 'payment',
       success_url: successUrl,
       cancel_url: cancelUrl,
-      customer_email: tenantEmail,
+      customer_email: guestEmail,
       metadata: {
-        month: month,
+        propertyId: propertyId,
         propertyTitle: propertyTitle,
-        tenantName: tenantName || 'Locataire',
-        leaseId: leaseId,
-        paymentId: paymentId || '',
-        type: isInstallmentPayment ? 'installment_payment' : 'rent_payment',
+        guestName: guestName || 'Client',
+        startDate: startDate,
+        endDate: endDate,
+        nights: nights.toString(),
+        reservationId: reservationId || '',
+        type: 'reservation_payment',
       },
     });
 
@@ -184,4 +153,3 @@ export default async function handler(
     });
   }
 }
-

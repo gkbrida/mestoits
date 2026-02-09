@@ -24,6 +24,8 @@ const ProfilPage = lazy(() => import('../pages/profil/page'));
 const FavorisPage = lazy(() => import('../pages/favoris/page'));
 const MessagesPage = lazy(() => import('../pages/messages/page'));
 const AgendaPage = lazy(() => import('../pages/agenda/page'));
+const MesReservationsPage = lazy(() => import('../pages/mes-reservations/page'));
+const MesPaiementsEchelonnesPage = lazy(() => import('../pages/mes-paiements-echelonnes/page'));
 const AidePage = lazy(() => import('../pages/aide/page'));
 const AProposPage = lazy(() => import('../pages/a-propos/page'));
 const MentionsLegalesPage = lazy(() => import('../pages/mentions-legales/page'));
@@ -118,6 +120,14 @@ const routes: RouteObject[] = [
   {
     path: '/agenda',
     element: <AgendaPage />,
+  },
+  {
+    path: '/mes-reservations',
+    element: <MesReservationsPage />,
+  },
+  {
+    path: '/mes-paiements-echelonnes',
+    element: <MesPaiementsEchelonnesPage />,
   },
   {
     path: '/aide',

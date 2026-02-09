@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { useEmail } from '../../../hooks/useEmail';
+
 
 interface PaiementEchelonnePageProps {
   userId: string;
