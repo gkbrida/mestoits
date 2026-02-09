@@ -43,6 +43,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Middleware pour logger les requêtes
+app.use((req, res, next) => {
+  console.log(`📥 ${req.method} ${req.path}`);
+  next();
+});
+
 // Initialiser Stripe
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
   apiVersion: '2023-10-16',
@@ -257,9 +263,13 @@ app.post("/create-payment-session", async (req, res) => {
 // Route pour la connexion admin
 app.post("/admin/login", async (req, res) => {
   try {
-    const { email, password } = req.body;
+    console.log('🔐 Requête de connexion admin reçue');
+    console.log('   Body:', { email: req.body?.email, hasPassword: !!req.body?.password });
+    
+    const { email, password } = req.body || {};
 
     if (!email || !password) {
+      console.log('❌ Email ou mot de passe manquant');
       return res.status(400).json({
         success: false,
         error: 'Email et mot de passe requis'
@@ -269,14 +279,22 @@ app.post("/admin/login", async (req, res) => {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+    console.log('🔍 Vérification des variables d\'environnement:', {
+      hasSupabaseUrl: !!supabaseUrl,
+      hasServiceRoleKey: !!supabaseServiceRoleKey
+    });
+
     if (!supabaseUrl || !supabaseServiceRoleKey) {
       console.error('❌ Variables d\'environnement Supabase manquantes');
+      console.error('   SUPABASE_URL:', supabaseUrl ? '✓' : '✗');
+      console.error('   SUPABASE_SERVICE_ROLE_KEY:', supabaseServiceRoleKey ? '✓' : '✗');
       return res.status(500).json({
         success: false,
         error: 'Variables d\'environnement Supabase manquantes'
       });
     }
 
+    console.log('📡 Création du client Supabase...');
     const supabaseAdmin = createClient(supabaseUrl, supabaseServiceRoleKey, {
       auth: {
         autoRefreshToken: false,
@@ -284,6 +302,7 @@ app.post("/admin/login", async (req, res) => {
       },
     });
 
+    console.log('🔍 Recherche de l\'admin dans la base de données...');
     // Récupérer l'admin par email
     const { data: admin, error: adminError } = await supabaseAdmin
       .from('admins')
@@ -292,16 +311,34 @@ app.post("/admin/login", async (req, res) => {
       .eq('is_active', true)
       .maybeSingle();
 
-    if (adminError || !admin) {
-      console.log(`❌ Tentative de connexion échouée pour: ${email}`);
+    if (adminError) {
+      console.error('❌ Erreur lors de la recherche de l\'admin:', adminError);
+      return res.status(500).json({
+        success: false,
+        error: `Erreur de base de données: ${adminError.message}`
+      });
+    }
+
+    if (!admin) {
+      console.log(`❌ Aucun admin trouvé pour: ${email}`);
       return res.status(401).json({
         success: false,
         error: 'Email ou mot de passe incorrect'
       });
     }
 
+    console.log('🔐 Vérification du mot de passe...');
     // Vérifier le mot de passe
-    const passwordMatch = await bcrypt.compare(password, admin.password_hash);
+    let passwordMatch = false;
+    try {
+      passwordMatch = await bcrypt.compare(password, admin.password_hash);
+    } catch (bcryptError) {
+      console.error('❌ Erreur lors de la comparaison du mot de passe:', bcryptError);
+      return res.status(500).json({
+        success: false,
+        error: 'Erreur lors de la vérification du mot de passe'
+      });
+    }
 
     if (!passwordMatch) {
       console.log(`❌ Mot de passe incorrect pour: ${email}`);
@@ -311,11 +348,17 @@ app.post("/admin/login", async (req, res) => {
       });
     }
 
+    console.log('✅ Mot de passe correct, mise à jour de la dernière connexion...');
     // Mettre à jour la dernière connexion
-    await supabaseAdmin
-      .from('admins')
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', admin.id);
+    try {
+      await supabaseAdmin
+        .from('admins')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', admin.id);
+    } catch (updateError) {
+      console.warn('⚠️ Erreur lors de la mise à jour de last_login:', updateError);
+      // On continue quand même, ce n'est pas critique
+    }
 
     // Retourner les informations de l'admin (sans le hash du mot de passe)
     const { password_hash, ...adminData } = admin;
@@ -328,10 +371,16 @@ app.post("/admin/login", async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur lors de la connexion admin:', error);
-    return res.status(500).json({
-      success: false,
-      error: error.message || 'Une erreur est survenue lors de la connexion',
-    });
+    console.error('   Stack:', error.stack);
+    
+    // S'assurer qu'une réponse JSON est toujours envoyée
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Une erreur est survenue lors de la connexion',
+        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
   }
 });
 
@@ -350,6 +399,28 @@ app.use((req, res) => {
   });
 });
 
+// Middleware de gestion d'erreurs global (doit être après toutes les routes)
+app.use((err, req, res, next) => {
+  console.error('❌ Erreur middleware:', err);
+  if (!res.headersSent) {
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Une erreur est survenue',
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+// Gestion globale des erreurs non capturées
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  process.exit(1);
+});
+
 // Démarrer le serveur
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
@@ -357,5 +428,11 @@ app.listen(PORT, () => {
   console.log(`📧 Zoho User: ${process.env.ZOHO_USER || 'contact@mestoits.com'}`);
   console.log(`🔐 Zoho Password: ${process.env.ZOHO_PASSWORD ? '✅ Défini' : '❌ NON DÉFINI'}`);
   console.log(`💳 Stripe Secret Key: ${process.env.STRIPE_SECRET_KEY ? '✅ Défini' : '❌ NON DÉFINI'}`);
+  console.log(`🗄️  Supabase URL: ${process.env.SUPABASE_URL ? '✅ Défini' : '❌ NON DÉFINI'}`);
+  console.log(`🔑 Supabase Service Role Key: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅ Défini' : '❌ NON DÉFINI'}`);
+  console.log(`\n📋 Routes disponibles:`);
+  console.log(`   POST /admin/login - Connexion admin`);
+  console.log(`   POST /send-email - Envoi d'email`);
+  console.log(`   GET /health - Vérification de santé`);
 });
 
