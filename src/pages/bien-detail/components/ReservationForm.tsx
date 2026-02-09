@@ -211,6 +211,51 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
         throw new Error(`Erreur lors de la création de la réservation: ${reservationError.message}`);
       }
 
+      // Récupérer les informations du propriétaire pour l'envoi de SMS
+      const { data: ownerData } = await supabase
+        .from('users_2025_12_01_11_29')
+        .select('full_name, email, phone')
+        .eq('id', finalOwnerId)
+        .single();
+
+      // Envoyer un SMS au propriétaire pour l'informer de la nouvelle réservation
+      if (ownerData?.phone) {
+        try {
+          const EMAIL_API_URL = import.meta.env.VITE_EMAIL_API_URL || '/api';
+          const formatDate = (dateString: string) => {
+            return new Date(dateString).toLocaleDateString('fr-FR', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            });
+          };
+
+          const smsMessage = `Nouvelle réservation pour "${propertyTitle || 'votre bien'}": ${userData.full_name || 'Client'} du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuit${nights > 1 ? 's' : ''}). Montant: ${formatPrice(totalAmount)} FCFA.`;
+
+          const smsResponse = await fetch(`${EMAIL_API_URL}/send-sms`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              number: ownerData.phone,
+              message: smsMessage,
+              sender: 'Mestoits',
+              campaignName: 'Nouvelle réservation',
+            }),
+          });
+
+          if (smsResponse.ok) {
+            console.log('✅ SMS envoyé au propriétaire avec succès');
+          } else {
+            console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire');
+          }
+        } catch (smsError) {
+          console.error('⚠️ Erreur lors de l\'envoi du SMS au propriétaire:', smsError);
+          // Ne pas bloquer la réservation si l'envoi de SMS échoue
+        }
+      }
+
       // Stocker les données de réservation et ouvrir le modal de paiement
       setSelectedReservation({
         id: reservationData.id,

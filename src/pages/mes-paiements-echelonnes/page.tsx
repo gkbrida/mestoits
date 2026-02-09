@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
+import { useEmail } from '../../hooks/useEmail';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
@@ -51,8 +52,10 @@ export default function MesPaiementsEchelonnesPage() {
   const [paymentResult, setPaymentResult] = useState<'success' | 'cancelled' | null>(null);
   const [showContactModal, setShowContactModal] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState<{ name?: string; email?: string; phone?: string } | null>(null);
+  const [selectedPlan, setSelectedPlan] = useState<InstallmentPlan | null>(null);
   const [message, setMessage] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
+  const { sendEmail } = useEmail();
 
   useEffect(() => {
     loadUserInfo();
@@ -254,8 +257,9 @@ export default function MesPaiementsEchelonnesPage() {
     setSelectedPaymentMethod('stripe');
   };
 
-  const handleContactOwner = (owner: { name?: string; email?: string; phone?: string }) => {
+  const handleContactOwner = (owner: { name?: string; email?: string; phone?: string }, plan: InstallmentPlan) => {
     setSelectedOwner(owner);
+    setSelectedPlan(plan);
     setShowContactModal(true);
     setMessage('');
   };
@@ -274,10 +278,17 @@ export default function MesPaiementsEchelonnesPage() {
         throw new Error('Utilisateur non connecté');
       }
 
+      // Récupérer les informations de l'utilisateur actuel (nom)
+      const { data: currentUserData } = await supabase
+        .from('users_2025_12_01_11_29')
+        .select('full_name, email')
+        .eq('id', user.id)
+        .single();
+
       // Récupérer l'ID du propriétaire
       const { data: ownerData } = await supabase
         .from('users_2025_12_01_11_29')
-        .select('id')
+        .select('id, full_name')
         .eq('email', selectedOwner.email)
         .single();
 
@@ -299,10 +310,28 @@ export default function MesPaiementsEchelonnesPage() {
         throw messageError;
       }
 
-      alert('Message envoyé avec succès !');
+      // Envoyer un email au propriétaire pour l'informer du nouveau message
+      if (selectedOwner.email) {
+        try {
+          await sendEmail('nouveau_message', {
+            receiverEmail: selectedOwner.email,
+            receiverName: selectedOwner.name || ownerData.full_name || 'Propriétaire',
+            senderName: currentUserData?.full_name || 'Client',
+            propertyTitle: selectedPlan?.property_title,
+            messagePreview: message.substring(0, 150),
+            appUrl: window.location.origin,
+          });
+        } catch (emailError) {
+          console.error('Erreur lors de l\'envoi de l\'email au propriétaire:', emailError);
+          // Ne pas bloquer l'envoi du message si l'email échoue
+        }
+      }
+
+      alert('Message envoyé avec succès ! Le propriétaire a été informé par email.');
       setShowContactModal(false);
       setMessage('');
       setSelectedOwner(null);
+      setSelectedPlan(null);
     } catch (error: any) {
       console.error('Erreur lors de l\'envoi du message:', error);
       alert(`Erreur lors de l'envoi du message: ${error.message || 'Erreur inconnue'}`);
@@ -513,7 +542,7 @@ export default function MesPaiementsEchelonnesPage() {
                                 name: plan.owner_name,
                                 email: plan.owner_email,
                                 phone: plan.owner_phone,
-                              });
+                              }, plan);
                             }}
                             className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
                           >
@@ -576,6 +605,7 @@ export default function MesPaiementsEchelonnesPage() {
                 onClick={() => {
                   setShowContactModal(false);
                   setSelectedOwner(null);
+                  setSelectedPlan(null);
                   setMessage('');
                 }}
                 className="text-gray-400 hover:text-gray-600"
@@ -621,6 +651,7 @@ export default function MesPaiementsEchelonnesPage() {
                 onClick={() => {
                   setShowContactModal(false);
                   setSelectedOwner(null);
+                  setSelectedPlan(null);
                   setMessage('');
                 }}
                 className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"

@@ -179,6 +179,72 @@ export default async function handler(
       }
 
       console.log(`✅ Réservation ${reservationId} mise à jour avec succès`);
+
+      // Envoyer un SMS au propriétaire pour l'informer de la confirmation de la réservation
+      try {
+        // Récupérer les informations de la réservation et du propriétaire
+        const { data: reservationData } = await supabaseAdmin
+          .from('reservations')
+          .select('property_id, guest_name, start_date, end_date, nights, total_amount, owner_id')
+          .eq('id', reservationId)
+          .single();
+
+        if (reservationData) {
+          const { data: ownerData } = await supabaseAdmin
+            .from('users_2025_12_01_11_29')
+            .select('phone, full_name')
+            .eq('id', reservationData.owner_id)
+            .single();
+
+          const { data: propertyData } = await supabaseAdmin
+            .from('properties_02')
+            .select('title')
+            .eq('id', reservationData.property_id)
+            .single();
+
+          if (ownerData?.phone) {
+            const formatDate = (dateString: string) => {
+              return new Date(dateString).toLocaleDateString('fr-FR', {
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+              });
+            };
+
+            const formatPrice = (amount: number) => {
+              return new Intl.NumberFormat('fr-FR').format(amount);
+            };
+
+            const smsMessage = `Réservation confirmée pour "${propertyData?.title || 'votre bien'}": ${reservationData.guest_name} du ${formatDate(reservationData.start_date)} au ${formatDate(reservationData.end_date)} (${reservationData.nights} nuit${reservationData.nights > 1 ? 's' : ''}). Montant: ${formatPrice(parseFloat(reservationData.total_amount))} FCFA.`;
+
+            const sendkitApiKey = process.env.SENDKIT_API_KEY || '2obhn21c9akly1nvsvl5vjvl0lulbtqhtnfj0chz45fp';
+            
+            const smsResponse = await fetch('https://api.sarbacane.com/sendkit/sms/send/notification', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-apiKey': sendkitApiKey,
+              },
+              body: JSON.stringify({
+                number: ownerData.phone,
+                message: smsMessage,
+                sender: 'Mestoits',
+                campaignName: 'Réservation confirmée',
+              }),
+            });
+
+            if (smsResponse.ok) {
+              console.log(`✅ SMS de confirmation envoyé au propriétaire ${ownerData.phone}`);
+            } else {
+              console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation');
+            }
+          }
+        }
+      } catch (smsError: any) {
+        console.error('⚠️ Erreur lors de l\'envoi du SMS de confirmation:', smsError.message);
+        // Ne pas bloquer le callback si l'envoi de SMS échoue
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Réservation confirmée avec succès'

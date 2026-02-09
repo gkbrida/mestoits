@@ -146,16 +146,28 @@ export default function MesReservationsPage() {
         throw new Error('Utilisateur non connecté');
       }
 
+      // Récupérer les informations de l'utilisateur actuel (nom)
+      const { data: currentUserData } = await supabase
+        .from('users_2025_12_01_11_29')
+        .select('full_name, email')
+        .eq('id', user.id)
+        .single();
+
       // Récupérer l'ID du propriétaire
       const { data: ownerData } = await supabase
         .from('users_2025_12_01_11_29')
-        .select('id')
+        .select('id, full_name')
         .eq('email', selectedOwner.email)
         .single();
 
       if (!ownerData) {
         throw new Error('Propriétaire introuvable');
       }
+
+      // Trouver la réservation correspondante pour obtenir le titre de la propriété
+      const reservation = reservations.find(r => 
+        r.owner_email === selectedOwner.email
+      );
 
       // Créer le message dans la table messages
       const { error: messageError } = await supabase
@@ -171,7 +183,24 @@ export default function MesReservationsPage() {
         throw messageError;
       }
 
-      alert('Message envoyé avec succès !');
+      // Envoyer un email au propriétaire pour l'informer du nouveau message
+      if (selectedOwner.email) {
+        try {
+          await sendEmail('nouveau_message', {
+            receiverEmail: selectedOwner.email,
+            receiverName: selectedOwner.name || ownerData.full_name || 'Propriétaire',
+            senderName: currentUserData?.full_name || 'Client',
+            propertyTitle: reservation?.property_title,
+            messagePreview: message.substring(0, 150),
+            appUrl: window.location.origin,
+          });
+        } catch (emailError) {
+          console.error('Erreur lors de l\'envoi de l\'email au propriétaire:', emailError);
+          // Ne pas bloquer l'envoi du message si l'email échoue
+        }
+      }
+
+      alert('Message envoyé avec succès ! Le propriétaire a été informé par email.');
       setShowContactModal(false);
       setMessage('');
       setSelectedOwner(null);
