@@ -24,6 +24,11 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
   const [loadingProperty, setLoadingProperty] = useState(true);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
+  const [inventories, setInventories] = useState<any[]>([]);
+  const [loadingInventories, setLoadingInventories] = useState(true);
+  const [showPhotoGallery, setShowPhotoGallery] = useState(false);
+  const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
+  const [currentPhotoList, setCurrentPhotoList] = useState<string[]>([]);
 
   // Charger les détails complets de la propriété depuis properties_02
   useEffect(() => {
@@ -31,6 +36,13 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
       loadPropertyDetails();
     }
   }, [rental?.property_02_id]);
+
+  // Charger les états des lieux
+  useEffect(() => {
+    if (rental?.id) {
+      loadInventories();
+    }
+  }, [rental?.id]);
 
   const loadPropertyDetails = async () => {
     if (!rental?.property_02_id) {
@@ -65,6 +77,72 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
       setLoadingProperty(false);
     }
   };
+
+  const loadInventories = async () => {
+    if (!rental?.id) {
+      setLoadingInventories(false);
+      return;
+    }
+
+    try {
+      setLoadingInventories(true);
+      const { data, error } = await supabase
+        .from('lease_inventories')
+        .select('*')
+        .eq('lease_id', rental.id)
+        .order('date', { ascending: false });
+
+      if (error) {
+        console.error('Erreur lors du chargement des états des lieux:', error);
+        setInventories([]);
+        return;
+      }
+
+      setInventories(data || []);
+    } catch (error) {
+      console.error('Erreur lors du chargement des états des lieux:', error);
+      setInventories([]);
+    } finally {
+      setLoadingInventories(false);
+    }
+  };
+
+  const openPhotoGallery = (photos: string[], startIndex: number = 0) => {
+    if (photos.length === 0) return;
+    setCurrentPhotoList(photos);
+    setCurrentPhotoIndex(startIndex);
+    setShowPhotoGallery(true);
+  };
+
+  // Navigation dans la galerie
+  const goToPreviousPhoto = () => {
+    setCurrentPhotoIndex((prev) => (prev > 0 ? prev - 1 : currentPhotoList.length - 1));
+  };
+
+  const goToNextPhoto = () => {
+    setCurrentPhotoIndex((prev) => (prev < currentPhotoList.length - 1 ? prev + 1 : 0));
+  };
+
+  // Gestion des touches clavier pour la navigation
+  useEffect(() => {
+    if (!showPhotoGallery) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goToPreviousPhoto();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        goToNextPhoto();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowPhotoGallery(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showPhotoGallery, currentPhotoList.length, currentPhotoIndex]);
 
   const handlePayRent = (rent: any) => {
     setSelectedRent(rent);
@@ -711,10 +789,15 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
           <div className="bg-white rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 shadow-sm">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">États des lieux</h2>
             
-            {rental.inventories && rental.inventories.length > 0 ? (
+            {loadingInventories ? (
+              <div className="text-center py-6 sm:py-8">
+                <i className="ri-loader-4-line text-3xl sm:text-4xl text-teal-600 animate-spin"></i>
+                <p className="mt-3 sm:mt-4 text-sm sm:text-base text-gray-600">Chargement des états des lieux...</p>
+              </div>
+            ) : inventories && inventories.length > 0 ? (
               <div className="space-y-3 sm:space-y-4">
-                {rental.inventories.map((inventory: any, index: number) => (
-                  <div key={index} className="border-2 border-gray-100 rounded-lg md:rounded-xl p-4 sm:p-6">
+                {inventories.map((inventory: any) => (
+                  <div key={inventory.id} className="border-2 border-gray-100 rounded-lg md:rounded-xl p-4 sm:p-6">
                     <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-0 mb-3 sm:mb-4">
                       <div className="flex items-center gap-2 sm:gap-3">
                         <div className={`flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-lg md:rounded-xl flex-shrink-0 ${
@@ -727,7 +810,7 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
                             {inventory.type === 'entry' ? 'État des lieux d\'entrée' : 'État des lieux de sortie'}
                           </h3>
                           {inventory.date && (
-                            <p className="text-xs sm:text-sm text-gray-600">Réalisé le {inventory.date}</p>
+                            <p className="text-xs sm:text-sm text-gray-600">Réalisé le {new Date(inventory.date).toLocaleDateString('fr-FR')}</p>
                           )}
                         </div>
                       </div>
@@ -740,15 +823,43 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
 
                     {inventory.date ? (
                       <>
-                        <div className="flex items-center gap-3 sm:gap-4 mb-2 sm:mb-3 text-xs sm:text-sm text-gray-600">
-                          <span className="flex items-center gap-1.5 sm:gap-2">
-                            <i className="ri-image-line w-3 h-3 sm:w-4 sm:h-4 flex items-center justify-center"></i>
-                            {inventory.photos} photos
-                          </span>
-                        </div>
-                        <p className="text-xs sm:text-sm text-gray-700 bg-gray-50 rounded-lg p-2 sm:p-3">
-                          {inventory.comments}
-                        </p>
+                        {/* Photo thumbnails */}
+                        {inventory.photos && inventory.photos.length > 0 && (
+                          <div className="mb-3 sm:mb-4">
+                            <div className="flex items-center gap-2 sm:gap-3 mb-2 sm:mb-3 text-xs sm:text-sm text-gray-600">
+                              <i className="ri-image-line w-3 h-3 sm:w-4 sm:h-4 flex items-center justify-center"></i>
+                              <span>{inventory.photos.length} photo{inventory.photos.length > 1 ? 's' : ''}</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {inventory.photos.slice(0, 4).map((photoUrl: string, index: number) => (
+                                <div
+                                  key={index}
+                                  onClick={() => openPhotoGallery(inventory.photos, index)}
+                                  className="relative aspect-square rounded-lg overflow-hidden border-2 border-gray-200 hover:border-teal-500 transition-colors cursor-pointer group"
+                                >
+                                  <img
+                                    src={photoUrl}
+                                    alt={`Photo ${index + 1}`}
+                                    className="w-full h-full object-cover"
+                                  />
+                                  {index === 3 && inventory.photos.length > 4 && (
+                                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                                      <span className="text-white font-semibold text-xs sm:text-sm">
+                                        +{inventory.photos.length - 4}
+                                      </span>
+                                    </div>
+                                  )}
+                                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors"></div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {inventory.comments && (
+                          <p className="text-xs sm:text-sm text-gray-700 bg-gray-50 rounded-lg p-2 sm:p-3 break-words">
+                            {inventory.comments}
+                          </p>
+                        )}
                       </>
                     ) : (
                       <p className="text-xs sm:text-sm text-gray-500 italic">Non réalisé</p>
@@ -1074,6 +1185,80 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Photo Gallery Modal */}
+      {showPhotoGallery && currentPhotoList.length > 0 && (
+        <div className="fixed inset-0 bg-black/95 flex items-center justify-center z-50">
+          <div className="relative w-full h-full flex items-center justify-center">
+            {/* Close Button */}
+            <button
+              onClick={() => setShowPhotoGallery(false)}
+              className="absolute top-4 right-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+            >
+              <i className="ri-close-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+            </button>
+
+            {/* Previous Button */}
+            {currentPhotoList.length > 1 && (
+              <button
+                onClick={goToPreviousPhoto}
+                className="absolute left-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+              >
+                <i className="ri-arrow-left-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+              </button>
+            )}
+
+            {/* Photo Display */}
+            <div className="max-w-7xl max-h-[90vh] w-full h-full flex items-center justify-center p-4">
+              <img
+                src={currentPhotoList[currentPhotoIndex]}
+                alt={`Photo ${currentPhotoIndex + 1} sur ${currentPhotoList.length}`}
+                className="max-w-full max-h-full object-contain rounded-lg"
+              />
+            </div>
+
+            {/* Next Button */}
+            {currentPhotoList.length > 1 && (
+              <button
+                onClick={goToNextPhoto}
+                className="absolute right-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+              >
+                <i className="ri-arrow-right-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+              </button>
+            )}
+
+            {/* Photo Counter */}
+            {currentPhotoList.length > 1 && (
+              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/50 text-white px-4 py-2 rounded-full text-sm backdrop-blur-sm">
+                {currentPhotoIndex + 1} / {currentPhotoList.length}
+              </div>
+            )}
+
+            {/* Thumbnail Strip */}
+            {currentPhotoList.length > 1 && (
+              <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 flex gap-2 max-w-4xl overflow-x-auto px-4 py-2 bg-black/30 backdrop-blur-sm rounded-lg">
+                {currentPhotoList.map((photoUrl, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setCurrentPhotoIndex(index)}
+                    className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                      index === currentPhotoIndex
+                        ? 'border-teal-500 scale-110'
+                        : 'border-white/30 hover:border-white/60'
+                    }`}
+                  >
+                    <img
+                      src={photoUrl}
+                      alt={`Miniature ${index + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

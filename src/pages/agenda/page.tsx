@@ -8,7 +8,7 @@ import Footer from '../../components/feature/Footer';
 
 interface CalendarEvent {
   id: string;
-  type: 'visit' | 'payment';
+  type: 'visit' | 'payment' | 'reservation' | 'installment' | 'short_term_visit';
   title: string;
   date: Date;
   time?: string;
@@ -18,7 +18,11 @@ interface CalendarEvent {
   visitorName?: string;
   listingId?: string;
   leaseId?: string;
+  reservationId?: string;
+  installmentPlanId?: string;
   isOwner?: boolean; // Pour les paiements : true si l'utilisateur est propriétaire, false si locataire
+  endDate?: Date; // Pour les réservations (date de fin)
+  operationType?: string; // Type d'opération de la propriété (sale, rental, short-term-rental)
 }
 
 interface Property {
@@ -72,7 +76,7 @@ export default function AgendaPage() {
     try {
       setLoadingProperties(true);
       const { data, error } = await supabase
-        .from('properties')
+        .from('properties_02')
         .select('id, title, address, city, owner_id')
         .eq('owner_id', user.id)
         .order('title', { ascending: true });
@@ -121,7 +125,7 @@ export default function AgendaPage() {
         visitFilter += `,visitor_id.eq.${userId}`;
       }
 
-      // Charger les visites
+      // Charger les visites depuis properties_02 uniquement
       const { data: visits, error: visitsError } = await supabase
         .from('visits')
         .select(`
@@ -131,13 +135,7 @@ export default function AgendaPage() {
           visitor_name,
           visitor_email,
           status,
-          property_id,
-          properties (
-            id,
-            title,
-            address,
-            owner_id
-          )
+          property_id
         `)
         .gte('visit_date', startOfMonth.toISOString().split('T')[0])
         .lte('visit_date', endOfMonth.toISOString().split('T')[0])
@@ -146,6 +144,26 @@ export default function AgendaPage() {
       if (visitsError) {
         console.error('Erreur lors du chargement des visites:', visitsError);
         throw visitsError;
+      }
+
+      // Charger les propriétés properties_02 pour les visites
+      let visitPropertyIds: string[] = [];
+      if (visits && visits.length > 0) {
+        visitPropertyIds = [...new Set(visits.map((v: any) => v.property_id).filter(Boolean))];
+      }
+      
+      let visitPropertiesMap = new Map();
+      if (visitPropertyIds.length > 0) {
+        const { data: visitProperties, error: visitPropertiesError } = await supabase
+          .from('properties_02')
+          .select('id, title, address, city, owner_id, operation_type')
+          .in('id', visitPropertyIds);
+
+        if (visitPropertiesError) {
+          console.error('Erreur lors du chargement des propriétés pour les visites:', visitPropertiesError);
+        } else {
+          visitPropertiesMap = new Map(visitProperties?.map((p: any) => [p.id, p]) || []);
+        }
       }
 
       // Charger les paiements de loyer depuis la table payments (sans jointure)
@@ -160,179 +178,367 @@ export default function AgendaPage() {
         throw paymentsError;
       }
 
-      console.log('📊 Paiements bruts chargés:', payments);
-      console.log('📊 Nombre de paiements bruts:', payments?.length || 0);
-      
+      console.log('📅 Debug - Paiements chargés:', payments?.length || 0);
+
       // Transformer les visites en événements (avant de traiter les paiements)
-      const visitEvents: CalendarEvent[] = (visits || []).map((visit: any) => ({
-        id: visit.id,
-        type: 'visit',
-        title: `Visite - ${visit.properties?.title || 'Bien'}`,
-        date: new Date(visit.visit_date),
-        time: visit.visit_time,
-        propertyAddress: visit.properties?.address,
-        visitorName: visit.visitor_name,
-        listingId: visit.properties?.id,
-        status: visit.status,
-      }));
-
-      if (!payments || payments.length === 0) {
-        console.warn('⚠️ Aucun paiement chargé pour ce mois. Vérifiez les dates et les données.');
-        setEvents(visitEvents);
-        setLoading(false);
-        return;
-      }
-
-      // Charger les baux (leases) séparément
-      const leaseIds = [...new Set(payments.map((p: any) => p.lease_id).filter(Boolean))];
-      const { data: leases, error: leasesError } = await supabase
-        .from('leases')
-        .select('id, property_id, owner_id, tenant_id')
-        .in('id', leaseIds);
-
-      if (leasesError) {
-        console.error('Erreur lors du chargement des baux:', leasesError);
-        throw leasesError;
-      }
-
-      // Charger les propriétés séparément
-      const propertyIds = [...new Set(leases?.map((l: any) => l.property_id).filter(Boolean) || [])];
-      const { data: properties, error: propertiesError } = await supabase
-        .from('properties')
-        .select('id, title, address, owner_id')
-        .in('id', propertyIds);
-
-      if (propertiesError) {
-        console.error('Erreur lors du chargement des propriétés:', propertiesError);
-        throw propertiesError;
-      }
-
-      // Charger les locataires séparément
-      const tenantIds = [...new Set(leases?.map((l: any) => l.tenant_id).filter(Boolean) || [])];
-      const { data: tenants, error: tenantsError } = await supabase
-        .from('tenants')
-        .select('id, email, first_name, last_name')
-        .in('id', tenantIds);
-
-      if (tenantsError) {
-        console.error('Erreur lors du chargement des locataires:', tenantsError);
-        throw tenantsError;
-      }
-
-      // Créer des Maps pour accès rapide
-      const leasesMap = new Map(leases?.map((l: any) => [l.id, l]) || []);
-      const propertiesMap = new Map(properties?.map((p: any) => [p.id, p]) || []);
-      const tenantsMap = new Map(tenants?.map((t: any) => [t.id, t]) || []);
-
-      // Récupérer les user_id des locataires pour filtrer les paiements
-      const tenantEmails = tenants?.map((t: any) => t.email).filter(Boolean) || [];
-      let tenantUserIds: string[] = [];
-      if (tenantEmails.length > 0) {
-        const { data: tenantUsers } = await supabase
-          .from('users_2025_12_01_11_29')
-          .select('id, email')
-          .in('email', tenantEmails);
-
-        if (tenantUsers) {
-          tenantUserIds = tenantUsers.map(u => u.id);
-        }
-      }
-
-      console.log('📊 Debug Agenda - Paiements chargés:', payments?.length || 0);
-      console.log('📊 Debug Agenda - User ID:', userId);
-      console.log('📊 Debug Agenda - Tenant User IDs:', tenantUserIds);
-      console.log('📊 Debug Agenda - Détails paiements:', payments);
-
-      // Transformer les paiements en événements (filtrer par rôle utilisateur)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      const paymentEvents: CalendarEvent[] = (payments || [])
-        .filter((payment: any) => {
-          // Récupérer les données associées depuis les Maps
-          const lease = leasesMap.get(payment.lease_id);
-          const property = lease ? propertiesMap.get(lease.property_id) : null;
-          const tenant = lease ? tenantsMap.get(lease.tenant_id) : null;
-          
-          // Vérifier si l'utilisateur est propriétaire
-          const isOwner = property?.owner_id === userId;
-          
-          // Vérifier si l'utilisateur est locataire
-          const tenantEmail = tenant?.email;
-          const isTenant = tenantEmail && tenantUserIds.includes(userId);
-          
-          // Debug pour chaque paiement
-          console.log('🔍 Debug paiement:', {
-            paymentId: payment.id,
-            leaseId: payment.lease_id,
-            hasLease: !!lease,
-            hasProperty: !!property,
-            ownerId: property?.owner_id,
-            userId,
-            isOwner,
-            tenantEmail,
-            tenantUserIds,
-            isTenant,
-            included: isOwner || isTenant
-          });
-          
-          // Filtrer uniquement les paiements où l'utilisateur est propriétaire ou locataire
-          return isOwner || isTenant;
+      const visitEvents: CalendarEvent[] = (visits || [])
+        .filter((visit: any) => {
+          // Filtrer uniquement les visites liées à properties_02
+          const property = visitPropertiesMap?.get(visit.property_id);
+          return property !== undefined;
         })
-        .map((payment: any) => {
-          // Récupérer les données associées depuis les Maps
-          const lease = leasesMap.get(payment.lease_id);
-          const property = lease ? propertiesMap.get(lease.property_id) : null;
-          
-          // Vérifier si l'utilisateur est propriétaire pour ce paiement
-          const isOwner = property?.owner_id === userId;
-          
-          // Utiliser due_date de la table payments pour représenter le paiement
-          const dueDate = new Date(payment.due_date);
-          dueDate.setHours(0, 0, 0, 0);
-          
-          // Déterminer le statut basé sur la date d'échéance (due_date) et le statut actuel
-          let status: 'paid' | 'pending' | 'overdue' = 'pending';
-          
-          if (payment.status === 'paid') {
-            // Si le paiement est marqué comme payé dans la DB
-            status = 'paid';
-          } else if (payment.status === 'cancelled') {
-            // Si le paiement est annulé, on peut le considérer comme pending ou l'exclure
-            status = 'pending';
-          } else {
-            // Si le paiement est en attente (pending), vérifier si la date d'échéance est dépassée
-            if (dueDate < today) {
-              // La date d'échéance est passée et le paiement n'est pas payé
-              status = 'overdue';
-            } else {
-              // La date d'échéance n'est pas encore atteinte
-              status = 'pending';
-            }
-          }
+        .map((visit: any) => {
+          const property = visitPropertiesMap?.get(visit.property_id);
+          const isShortTermRental = property?.operation_type === 'short-term-rental';
           
           return {
-            id: payment.id,
-            type: 'payment' as const,
-            title: `Loyer - ${property?.title || 'Bien'}`,
-            date: dueDate, // Utiliser due_date comme date de l'événement
-            amount: Number(payment.amount) || 0,
-            status: status, // Statut calculé basé sur due_date et payment.status
-            propertyAddress: property?.address || '',
-            leaseId: payment.lease_id, // Stocker le lease_id pour la navigation
-            isOwner: isOwner, // Stocker si l'utilisateur est propriétaire
+            id: visit.id,
+            type: isShortTermRental ? 'short_term_visit' as const : 'visit' as const,
+            title: `Visite - ${property?.title || 'Bien'}`,
+            date: new Date(visit.visit_date),
+            time: visit.visit_time,
+            propertyAddress: property?.address ? `${property.address}, ${property.city || ''}`.trim() : '',
+            visitorName: visit.visitor_name,
+            listingId: property?.id,
+            status: visit.status,
+            operationType: property?.operation_type,
           };
         });
 
-      console.log('📅 Debug Agenda - Visites:', visitEvents.length);
-      console.log('📅 Debug Agenda - Paiements filtrés:', paymentEvents.length);
-      console.log('📅 Debug Agenda - Total événements:', visitEvents.length + paymentEvents.length);
-      console.log('📅 Debug Agenda - Événements paiements:', paymentEvents);
+      // Charger les paiements de loyer
+      let paymentEvents: CalendarEvent[] = [];
       
-      const allEvents = [...visitEvents, ...paymentEvents].sort((a, b) => a.date.getTime() - b.date.getTime());
-      console.log('📅 Debug Agenda - Tous les événements triés:', allEvents);
-      console.log('📅 Debug Agenda - Événements à afficher:', allEvents.length);
-      
+      if (payments && payments.length > 0) {
+        // Charger les baux (leases) séparément
+        const leaseIds = [...new Set(payments.map((p: any) => p.lease_id).filter(Boolean))];
+        const { data: leases, error: leasesError } = await supabase
+          .from('leases')
+          .select('id, property_id, owner_id, tenant_id')
+          .in('id', leaseIds);
+
+        if (leasesError) {
+          console.error('Erreur lors du chargement des baux:', leasesError);
+          throw leasesError;
+        }
+
+        // Charger les propriétés properties_02 séparément
+        const propertyIds = [...new Set(leases?.map((l: any) => l.property_id).filter(Boolean) || [])];
+        
+        // Essayer d'abord properties_02 (table principale)
+        let properties: any[] = [];
+        const { data: properties02, error: properties02Error } = await supabase
+          .from('properties_02')
+          .select('id, title, address, city, owner_id')
+          .in('id', propertyIds);
+
+        if (properties02Error) {
+          console.error('Erreur lors du chargement des propriétés depuis properties_02:', properties02Error);
+        } else {
+          properties = properties02 || [];
+        }
+
+        // Si certaines propriétés ne sont pas trouvées dans properties_02, essayer properties (ancienne table)
+        const foundPropertyIds = new Set(properties.map(p => p.id));
+        const missingPropertyIds = propertyIds.filter(id => !foundPropertyIds.has(id));
+        
+        if (missingPropertyIds.length > 0) {
+          console.log('📅 Debug - Propriétés non trouvées dans properties_02, recherche dans properties:', missingPropertyIds.length);
+          const { data: propertiesOld, error: propertiesOldError } = await supabase
+            .from('properties')
+            .select('id, title, address, city, owner_id')
+            .in('id', missingPropertyIds);
+
+          if (propertiesOldError) {
+            console.error('Erreur lors du chargement des propriétés depuis properties:', propertiesOldError);
+          } else if (propertiesOld && propertiesOld.length > 0) {
+            properties = [...properties, ...propertiesOld];
+            console.log('📅 Debug - Propriétés trouvées dans properties (ancienne table):', propertiesOld.length);
+          }
+        }
+
+        // Charger les locataires séparément
+        const tenantIds = [...new Set(leases?.map((l: any) => l.tenant_id).filter(Boolean) || [])];
+        const { data: tenants, error: tenantsError } = await supabase
+          .from('tenants')
+          .select('id, email, first_name, last_name')
+          .in('id', tenantIds);
+
+        if (tenantsError) {
+          console.error('Erreur lors du chargement des locataires:', tenantsError);
+          throw tenantsError;
+        }
+
+        // Créer des Maps pour accès rapide
+        const leasesMap = new Map(leases?.map((l: any) => [l.id, l]) || []);
+        const propertiesMap = new Map(properties?.map((p: any) => [p.id, p]) || []);
+        const tenantsMap = new Map(tenants?.map((t: any) => [t.id, t]) || []);
+
+        // Transformer les paiements en événements (filtrer par rôle utilisateur)
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Récupérer l'email de l'utilisateur connecté pour vérifier s'il est locataire
+        const { data: { user: authUserForPayments } } = await supabase.auth.getUser();
+        const userEmailForPayments = authUserForPayments?.email;
+        
+        paymentEvents = (payments || [])
+          .filter((payment: any) => {
+            // Récupérer les données associées depuis les Maps
+            const lease = leasesMap.get(payment.lease_id);
+            if (!lease) {
+              console.log('📅 Debug - Paiement filtré: bail non trouvé', payment.id);
+              return false;
+            }
+            
+            const property = propertiesMap.get(lease.property_id);
+            if (!property) {
+              console.log('📅 Debug - Paiement filtré: propriété non trouvée', payment.id, 'property_id:', lease.property_id);
+              return false;
+            }
+            
+            const tenant = tenantsMap.get(lease.tenant_id);
+            
+            // Vérifier si l'utilisateur est propriétaire
+            const isOwner = property.owner_id === userId;
+            
+            // Vérifier si l'utilisateur est locataire (par email)
+            const isTenant = userEmailForPayments && tenant?.email === userEmailForPayments;
+            
+            console.log('📅 Debug - Paiement', payment.id, {
+              isOwner,
+              isTenant,
+              propertyOwnerId: property.owner_id,
+              userId,
+              tenantEmail: tenant?.email,
+              userEmail: userEmailForPayments
+            });
+            
+            // Filtrer uniquement les paiements où l'utilisateur est propriétaire ou locataire
+            return isOwner || isTenant;
+          })
+          .map((payment: any) => {
+            // Récupérer les données associées depuis les Maps
+            const lease = leasesMap.get(payment.lease_id);
+            const property = lease ? propertiesMap.get(lease.property_id) : null;
+            
+            // Vérifier si l'utilisateur est propriétaire pour ce paiement
+            const isOwner = property?.owner_id === userId;
+            
+            // Utiliser due_date de la table payments pour représenter le paiement
+            const dueDate = new Date(payment.due_date);
+            dueDate.setHours(0, 0, 0, 0);
+            
+            // Déterminer le statut basé sur la date d'échéance (due_date) et le statut actuel
+            let status: 'paid' | 'pending' | 'overdue' = 'pending';
+            
+            if (payment.status === 'paid') {
+              status = 'paid';
+            } else if (payment.status === 'cancelled') {
+              status = 'pending';
+            } else {
+              if (dueDate < today) {
+                status = 'overdue';
+              } else {
+                status = 'pending';
+              }
+            }
+            
+            return {
+              id: payment.id,
+              type: 'payment' as const,
+              title: `Loyer - ${property?.title || 'Bien'}`,
+              date: dueDate,
+              amount: Number(payment.amount) || 0,
+              status: status,
+              propertyAddress: property?.address ? `${property.address}, ${property.city || ''}`.trim() : '',
+              leaseId: payment.lease_id,
+              isOwner: isOwner,
+            };
+          });
+
+        console.log('📅 Debug - Paiements filtrés (événements créés):', paymentEvents.length);
+      } else {
+        console.log('📅 Debug - Aucun paiement à traiter');
+      }
+
+      // Charger les réservations (locations courte durée)
+      let reservationEvents: CalendarEvent[] = [];
+      try {
+        // Récupérer l'email de l'utilisateur pour filtrer les réservations côté client
+        const { data: userData } = await supabase
+          .from('users_2025_12_01_11_29')
+          .select('email')
+          .eq('id', userId)
+          .maybeSingle();
+
+        const userEmailForReservations = userData?.email || userEmail;
+
+        // Construire le filtre pour les réservations
+        // Propriétaire : owner_id = userId
+        // Client : guest_email = userEmail
+        let reservationFilter = `owner_id.eq.${userId}`;
+        if (userEmailForReservations) {
+          reservationFilter += `,guest_email.eq.${userEmailForReservations}`;
+        }
+
+        const { data: reservations, error: reservationsError } = await supabase
+          .from('reservations')
+          .select(`
+            id,
+            start_date,
+            end_date,
+            guest_name,
+            total_amount,
+            status,
+            property_id,
+            owner_id
+          `)
+          .or(reservationFilter)
+          .gte('start_date', startOfMonth.toISOString().split('T')[0])
+          .lte('start_date', endOfMonth.toISOString().split('T')[0]);
+
+        if (reservationsError && !reservationsError.message?.includes('does not exist')) {
+          console.error('Erreur lors du chargement des réservations:', reservationsError);
+        } else if (reservations && reservations.length > 0) {
+          // Charger les propriétés pour les réservations
+          const reservationPropertyIds = [...new Set(reservations.map((r: any) => r.property_id).filter(Boolean))];
+          const { data: reservationProperties } = await supabase
+            .from('properties_02')
+            .select('id, title, address, city, owner_id')
+            .in('id', reservationPropertyIds);
+
+          const reservationPropertiesMap = new Map(reservationProperties?.map((p: any) => [p.id, p]) || []);
+
+          reservationEvents = reservations.map((reservation: any) => {
+            const property = reservationPropertiesMap.get(reservation.property_id);
+            const startDate = new Date(reservation.start_date);
+            startDate.setHours(0, 0, 0, 0);
+            const endDate = new Date(reservation.end_date);
+            endDate.setHours(0, 0, 0, 0);
+            const isOwner = property?.owner_id === userId;
+
+            return {
+              id: reservation.id,
+              type: 'reservation' as const,
+              title: `Réservation - ${property?.title || 'Bien'}`,
+              date: startDate,
+              endDate: endDate,
+              amount: Number(reservation.total_amount) || 0,
+              status: reservation.status,
+              propertyAddress: property?.address ? `${property.address}, ${property.city || ''}`.trim() : '',
+              visitorName: reservation.guest_name,
+              listingId: reservation.property_id,
+              reservationId: reservation.id,
+              isOwner: isOwner,
+            };
+          });
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des réservations:', error);
+      }
+
+      // Charger les paiements échelonnés
+      let installmentEvents: CalendarEvent[] = [];
+      try {
+        // Récupérer l'email de l'utilisateur pour filtrer les paiements échelonnés côté payeur
+        const { data: userDataForInstallments } = await supabase
+          .from('users_2025_12_01_11_29')
+          .select('email')
+          .eq('id', userId)
+          .maybeSingle();
+
+        const userEmailForInstallments = userDataForInstallments?.email || userEmail || '';
+
+        // Charger les plans de paiement échelonnés où l'utilisateur est propriétaire ou payeur
+        let installmentPlanFilter = `owner_id.eq.${userId}`;
+        if (userEmailForInstallments) {
+          installmentPlanFilter += `,payer_email.eq.${userEmailForInstallments}`;
+        }
+
+        const { data: installmentPlans, error: installmentPlansError } = await supabase
+          .from('installment_plans')
+          .select('id, property_id, owner_id, payer_email, status')
+          .or(installmentPlanFilter)
+          .eq('status', 'active');
+
+        if (installmentPlansError && !installmentPlansError.message?.includes('does not exist')) {
+          console.error('Erreur lors du chargement des plans de paiement échelonnés:', installmentPlansError);
+        } else if (installmentPlans && installmentPlans.length > 0) {
+          // Filtrer les plans pour ne garder que ceux où l'utilisateur est propriétaire ou payeur
+          const filteredPlans = installmentPlans.filter((plan: any) => {
+            const isOwner = plan.owner_id === userId;
+            const isPayer = userEmailForInstallments && plan.payer_email === userEmailForInstallments;
+            return isOwner || isPayer;
+          });
+
+          const planIds = filteredPlans.map((p: any) => p.id);
+
+          if (planIds.length > 0) {
+            // Charger les paiements échelonnés pour ces plans
+            const { data: installmentPayments, error: installmentPaymentsError } = await supabase
+              .from('installment_payments')
+              .select('id, installment_plan_id, due_date, amount, status, installment_number')
+              .in('installment_plan_id', planIds)
+              .gte('due_date', startOfMonth.toISOString().split('T')[0])
+              .lte('due_date', endOfMonth.toISOString().split('T')[0])
+              .order('due_date', { ascending: true });
+
+            if (installmentPaymentsError && !installmentPaymentsError.message?.includes('does not exist')) {
+              console.error('Erreur lors du chargement des paiements échelonnés:', installmentPaymentsError);
+            } else if (installmentPayments && installmentPayments.length > 0) {
+              // Charger les propriétés pour les paiements échelonnés
+              const installmentPropertyIds = [...new Set(filteredPlans.map((p: any) => p.property_id).filter(Boolean))];
+              const { data: installmentProperties } = await supabase
+                .from('properties_02')
+                .select('id, title, address, city, owner_id')
+                .in('id', installmentPropertyIds);
+
+              const installmentPropertiesMap = new Map(installmentProperties?.map((p: any) => [p.id, p]) || []);
+              const plansMap = new Map(filteredPlans.map((p: any) => [p.id, p]));
+
+              const todayForInstallments = new Date();
+              todayForInstallments.setHours(0, 0, 0, 0);
+
+              installmentEvents = installmentPayments.map((payment: any) => {
+                const plan = plansMap.get(payment.installment_plan_id);
+                const property = plan ? installmentPropertiesMap.get(plan.property_id) : null;
+                const dueDate = new Date(payment.due_date);
+                dueDate.setHours(0, 0, 0, 0);
+                const isOwner = property?.owner_id === userId;
+
+                // Déterminer le statut
+                let status: 'paid' | 'pending' | 'overdue' = 'pending';
+                if (payment.status === 'paid') {
+                  status = 'paid';
+                } else {
+                  if (dueDate < todayForInstallments) {
+                    status = 'overdue';
+                  } else {
+                    status = 'pending';
+                  }
+                }
+
+                return {
+                  id: payment.id,
+                  type: 'payment' as const,
+                  title: `Échéance ${payment.installment_number} - ${property?.title || 'Bien'}`,
+                  date: dueDate,
+                  amount: Number(payment.amount) || 0,
+                  status: status,
+                  propertyAddress: property?.address ? `${property.address}, ${property.city || ''}`.trim() : '',
+                  listingId: plan?.property_id,
+                  installmentPlanId: payment.installment_plan_id,
+                  isOwner: isOwner,
+                };
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des paiements échelonnés:', error);
+      }
+
+      const allEvents = [...visitEvents, ...paymentEvents, ...reservationEvents, ...installmentEvents].sort((a, b) => a.date.getTime() - b.date.getTime());
       setEvents(allEvents);
     } catch (error) {
       console.error('Erreur lors du chargement des événements:', error);
@@ -366,11 +572,22 @@ export default function AgendaPage() {
 
   const getEventsForDate = (date: Date | null) => {
     if (!date) return [];
-    return events.filter(event => 
-      event.date.getDate() === date.getDate() &&
-      event.date.getMonth() === date.getMonth() &&
-      event.date.getFullYear() === date.getFullYear()
-    );
+    const dateStr = date.toISOString().split('T')[0];
+    const dateTime = date.getTime();
+    
+    return events.filter(event => {
+      const eventDateStr = event.date.toISOString().split('T')[0];
+      const eventDateTime = event.date.getTime();
+      
+      // Pour les réservations, vérifier si la date est entre le début et la fin
+      if (event.type === 'reservation' && event.endDate) {
+        const endDateTime = event.endDate.getTime();
+        return (dateTime >= eventDateTime && dateTime <= endDateTime);
+      }
+      
+      // Pour les autres événements, vérifier uniquement la date exacte
+      return eventDateStr === dateStr;
+    });
   };
 
   const previousMonth = () => {
@@ -402,14 +619,28 @@ export default function AgendaPage() {
     if (event.type === 'visit' && event.listingId) {
       // Navigation vers la page de gestion locative avec le bien sélectionné
       navigate(`/gestion-locative?tab=properties&property=${event.listingId}`);
-    } else if (event.type === 'payment' && event.leaseId) {
-      // Navigation vers la page de gestion locative ou mes locations selon le rôle
+    } else if (event.type === 'payment') {
+      if (event.leaseId) {
+        // Paiement de loyer
+        if (event.isOwner) {
+          navigate(`/gestion-locative?tab=leases&lease=${event.leaseId}`);
+        } else {
+          navigate(`/mes-locations?lease=${event.leaseId}`);
+        }
+      } else if (event.installmentPlanId) {
+        // Paiement échelonné
+        if (event.isOwner) {
+          navigate(`/gestion-locative?tab=paiements-echelonnes`);
+        } else {
+          navigate(`/mes-paiements-echelonnes`);
+        }
+      }
+    } else if (event.type === 'reservation' && event.reservationId) {
+      // Navigation vers la page de gestion locative ou mes réservations selon le rôle
       if (event.isOwner) {
-        // Propriétaire : aller vers gestion locative avec le bail sélectionné
-        navigate(`/gestion-locative?tab=leases&lease=${event.leaseId}`);
+        navigate(`/gestion-locative?tab=reservations`);
       } else {
-        // Locataire : aller vers mes locations
-        navigate(`/mes-locations?lease=${event.leaseId}`);
+        navigate(`/mes-reservations`);
       }
     }
   };
@@ -443,9 +674,20 @@ export default function AgendaPage() {
         visit_time: formData.visit_time,
         message: formData.notes,
         status: 'confirmed',
-      });
+      }).select();
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error('Erreur détaillée lors de la création de la visite:', insertError);
+        // Message d'erreur plus spécifique selon le type d'erreur
+        if (insertError.code === '23503') {
+          throw new Error('Le bien sélectionné n\'existe pas ou n\'est plus disponible.');
+        } else if (insertError.code === '23505') {
+          throw new Error('Une visite existe déjà pour ce bien à cette date et heure.');
+        } else if (insertError.code === 'PGRST116') {
+          throw new Error('Vous n\'avez pas les permissions pour créer cette visite.');
+        }
+        throw insertError;
+      }
 
       // Envoyer un email d'invitation au visiteur
       try {
@@ -829,10 +1071,14 @@ export default function AgendaPage() {
           </div>
 
           {/* Legend */}
-          <div className="flex gap-3 sm:gap-4">
+          <div className="flex flex-wrap gap-2 sm:gap-3 md:gap-4">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <div className="w-3 h-3 sm:w-4 sm:h-4 bg-green-500 rounded"></div>
+              <span className="text-xs sm:text-sm text-gray-600">Visites</span>
+            </div>
             <div className="flex items-center gap-1.5 sm:gap-2">
               <div className="w-3 h-3 sm:w-4 sm:h-4 bg-blue-500 rounded"></div>
-              <span className="text-xs sm:text-sm text-gray-600">Visites</span>
+              <span className="text-xs sm:text-sm text-gray-600">Réservations</span>
             </div>
             <div className="flex items-center gap-1.5 sm:gap-2">
               <div className="w-3 h-3 sm:w-4 sm:h-4 bg-orange-500 rounded"></div>
@@ -881,6 +1127,7 @@ export default function AgendaPage() {
                   {getDaysInMonth().map((date, index) => {
                     const dayEvents = date ? getEventsForDate(date) : [];
                     const hasVisits = dayEvents.some(e => e.type === 'visit');
+                    const hasReservations = dayEvents.some(e => e.type === 'reservation');
                     const hasPayments = dayEvents.some(e => e.type === 'payment');
                     
                     return (
@@ -908,8 +1155,43 @@ export default function AgendaPage() {
                             </div>
                             <div className="space-y-0.5 sm:space-y-1">
                               {hasVisits && (
-                                <div className="w-full h-1 sm:h-1.5 bg-blue-500 rounded-full"></div>
+                                <div className="w-full h-1 sm:h-1.5 bg-green-500 rounded-full"></div>
                               )}
+                              {hasReservations && (() => {
+                                const reservationEvents = dayEvents.filter(e => e.type === 'reservation');
+                                const dateStr = date.toISOString().split('T')[0];
+                                
+                                // Vérifier si c'est le début d'une réservation
+                                const isStart = reservationEvents.some(e => {
+                                  const eventDateStr = e.date.toISOString().split('T')[0];
+                                  return eventDateStr === dateStr;
+                                });
+                                
+                                // Vérifier si c'est la fin d'une réservation
+                                const isEnd = reservationEvents.some(e => {
+                                  if (!e.endDate) return false;
+                                  const endDateStr = e.endDate.toISOString().split('T')[0];
+                                  return endDateStr === dateStr;
+                                });
+                                
+                                // Si c'est à la fois le début et la fin (réservation d'un jour)
+                                if (isStart && isEnd) {
+                                  return <div className="w-full h-1 sm:h-1.5 bg-blue-500 rounded-full"></div>;
+                                }
+                                
+                                // Si c'est le début d'une réservation
+                                if (isStart) {
+                                  return <div className="w-full h-1 sm:h-1.5 bg-blue-500 rounded-l-full"></div>;
+                                }
+                                
+                                // Si c'est la fin d'une réservation
+                                if (isEnd) {
+                                  return <div className="w-full h-1 sm:h-1.5 bg-blue-500 rounded-r-full"></div>;
+                                }
+                                
+                                // Si c'est au milieu d'une réservation
+                                return <div className="w-full h-1 sm:h-1.5 bg-blue-500"></div>;
+                              })()}
                               {hasPayments && (
                                 <div className="w-full h-1 sm:h-1.5 bg-orange-500 rounded-full"></div>
                               )}
@@ -945,16 +1227,26 @@ export default function AgendaPage() {
                         onClick={() => handleEventClick(event)}
                         className={`p-3 sm:p-4 rounded-lg border-l-4 cursor-pointer hover:shadow-md transition-all ${
                           event.type === 'visit'
+                            ? 'bg-green-50 border-green-500 hover:bg-green-100'
+                            : event.type === 'reservation'
                             ? 'bg-blue-50 border-blue-500 hover:bg-blue-100'
                             : 'bg-orange-50 border-orange-500 hover:bg-orange-100'
                         }`}
                       >
                         <div className="flex items-start gap-2 sm:gap-3">
                           <div className={`w-7 h-7 sm:w-8 sm:h-8 flex items-center justify-center rounded-lg flex-shrink-0 ${
-                            event.type === 'visit' ? 'bg-blue-500' : 'bg-orange-500'
+                            event.type === 'visit' 
+                              ? 'bg-green-500' 
+                              : event.type === 'reservation'
+                              ? 'bg-blue-500'
+                              : 'bg-orange-500'
                           }`}>
                             <i className={`${
-                              event.type === 'visit' ? 'ri-eye-line' : 'ri-money-euro-circle-line'
+                              event.type === 'visit' 
+                                ? 'ri-eye-line' 
+                                : event.type === 'reservation'
+                                ? 'ri-calendar-check-line'
+                                : 'ri-money-euro-circle-line'
                             } text-white text-base sm:text-lg`}></i>
                           </div>
                           <div className="flex-1 min-w-0">
@@ -984,6 +1276,12 @@ export default function AgendaPage() {
                                 {event.amount.toLocaleString('fr-FR')} FCFA
                               </p>
                             )}
+                            {event.endDate && event.type === 'reservation' && (
+                              <p className="text-[10px] sm:text-xs text-gray-600 mb-1">
+                                <i className="ri-calendar-line mr-1"></i>
+                                Du {event.date.toLocaleDateString('fr-FR')} au {event.endDate.toLocaleDateString('fr-FR')}
+                              </p>
+                            )}
                             {event.status && (
                               <span className={`inline-block px-2 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-xs font-medium mt-2 ${
                                 // Statuts pour les paiements
@@ -1002,12 +1300,21 @@ export default function AgendaPage() {
                                   ? 'bg-red-100 text-red-700'
                                   : event.type === 'visit' && event.status === 'completed'
                                   ? 'bg-gray-100 text-gray-700'
+                                  // Statuts pour les réservations
+                                  : event.type === 'reservation' && event.status === 'confirmed'
+                                  ? 'bg-green-100 text-green-700'
+                                  : event.type === 'reservation' && event.status === 'pending'
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : event.type === 'reservation' && event.status === 'cancelled'
+                                  ? 'bg-red-100 text-red-700'
+                                  : event.type === 'reservation' && event.status === 'completed'
+                                  ? 'bg-gray-100 text-gray-700'
                                   : 'bg-gray-100 text-gray-700'
                               }`}>
-                                {event.type === 'payment' 
+                                {event.type === 'payment'
                                   ? (event.status === 'paid' ? 'Payé' : event.status === 'pending' ? 'En attente' : 'En retard')
-                                  : event.type === 'visit'
-                                  ? (event.status === 'confirmed' ? 'Confirmée' : event.status === 'pending' ? 'En attente' : event.status === 'cancelled' ? 'Annulée' : event.status === 'completed' ? 'Effectuée' : event.status)
+                                  : event.type === 'visit' || event.type === 'reservation'
+                                  ? (event.status === 'confirmed' ? 'Confirmée' : event.status === 'pending' ? 'En attente' : event.status === 'cancelled' ? 'Annulée' : event.status === 'completed' ? 'Terminée' : event.status)
                                   : event.status}
                               </span>
                             )}
@@ -1060,10 +1367,18 @@ export default function AgendaPage() {
                   >
                     <div className="flex items-start gap-3 sm:gap-4">
                       <div className={`w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-lg flex-shrink-0 ${
-                        event.type === 'visit' ? 'bg-blue-500' : 'bg-orange-500'
+                        event.type === 'visit' 
+                          ? 'bg-green-500' 
+                          : event.type === 'reservation'
+                          ? 'bg-blue-500'
+                          : 'bg-orange-500'
                       }`}>
                         <i className={`${
-                          event.type === 'visit' ? 'ri-eye-line' : 'ri-money-euro-circle-line'
+                          event.type === 'visit' 
+                            ? 'ri-eye-line' 
+                            : event.type === 'reservation'
+                            ? 'ri-calendar-check-line'
+                            : 'ri-money-euro-circle-line'
                         } text-white text-lg sm:text-xl`}></i>
                       </div>
                       <div className="flex-1 min-w-0">
@@ -1103,6 +1418,12 @@ export default function AgendaPage() {
                             {event.visitorName}
                           </p>
                         )}
+                        {event.endDate && event.type === 'reservation' && (
+                          <p className="text-xs sm:text-sm text-gray-600 mb-2">
+                            <i className="ri-calendar-line mr-1"></i>
+                            Jusqu'au {event.endDate.toLocaleDateString('fr-FR')}
+                          </p>
+                        )}
                         {event.status && (
                           <span className={`inline-block px-2 sm:px-3 py-0.5 sm:py-1 rounded-full text-[10px] sm:text-xs font-medium ${
                             // Statuts pour les paiements
@@ -1121,12 +1442,21 @@ export default function AgendaPage() {
                               ? 'bg-red-100 text-red-700'
                               : event.type === 'visit' && event.status === 'completed'
                               ? 'bg-gray-100 text-gray-700'
+                              // Statuts pour les réservations
+                              : event.type === 'reservation' && event.status === 'confirmed'
+                              ? 'bg-green-100 text-green-700'
+                              : event.type === 'reservation' && event.status === 'pending'
+                              ? 'bg-yellow-100 text-yellow-700'
+                              : event.type === 'reservation' && event.status === 'cancelled'
+                              ? 'bg-red-100 text-red-700'
+                              : event.type === 'reservation' && event.status === 'completed'
+                              ? 'bg-gray-100 text-gray-700'
                               : 'bg-gray-100 text-gray-700'
                           }`}>
-                            {event.type === 'payment' 
+                            {event.type === 'payment'
                               ? (event.status === 'paid' ? 'Payé' : event.status === 'pending' ? 'En attente' : 'En retard')
-                              : event.type === 'visit'
-                              ? (event.status === 'confirmed' ? 'Confirmée' : event.status === 'pending' ? 'En attente' : event.status === 'cancelled' ? 'Annulée' : event.status === 'completed' ? 'Effectuée' : event.status)
+                              : event.type === 'visit' || event.type === 'reservation'
+                              ? (event.status === 'confirmed' ? 'Confirmée' : event.status === 'pending' ? 'En attente' : event.status === 'cancelled' ? 'Annulée' : event.status === 'completed' ? 'Terminée' : event.status)
                               : event.status}
                           </span>
                         )}
