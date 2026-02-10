@@ -1070,6 +1070,21 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
       if (updateError) throw updateError;
 
       // Récupérer les informations du locataire et du bien pour l'email
+      // Utiliser property_02_id en priorité, sinon property_id pour compatibilité
+      const propertyId = lease.property_02_id || lease.property_id;
+      
+      if (!propertyId) {
+        throw new Error('ID de propriété non trouvé pour ce bail');
+      }
+      
+      if (!lease.tenant_id) {
+        throw new Error('ID de locataire non trouvé pour ce bail');
+      }
+      
+      if (!userId) {
+        throw new Error('Utilisateur non authentifié');
+      }
+
       const [tenantData, propertyData, ownerData] = await Promise.all([
         supabase
           .from('tenants')
@@ -1079,7 +1094,7 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
         supabase
           .from('properties_02')
           .select('title, address, city')
-          .eq('id', lease.property_02_id)
+          .eq('id', propertyId)
           .single(),
         supabase
           .from('users_2025_12_01_11_29')
