@@ -5,6 +5,7 @@ import { useEmail } from '../../hooks/useEmail';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
+import { generateReservationReceiptPDF } from '../../utils/reservationReceiptPdfGenerator';
 
 interface Reservation {
   id: string;
@@ -337,18 +338,18 @@ L'équipe Mestoits`,
                   onClick={() => navigate(`/bien/${reservation.property_id}`)}
                   className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
                 >
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1">
-                      <h3 className="text-xl font-semibold text-gray-900 mb-1">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-4 gap-2">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-1 break-words">
                         {reservation.property_title || 'Bien immobilier'}
                       </h3>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-xs sm:text-sm text-gray-600 break-words">
                         {reservation.property_address && reservation.property_city 
                           ? `${reservation.property_address}, ${reservation.property_city}`
                           : 'Adresse non disponible'}
                       </p>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
+                    <span className={`px-2 sm:px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${getStatusColor(reservation.status)}`}>
                       {getStatusLabel(reservation.status)}
                     </span>
                   </div>
@@ -372,7 +373,7 @@ L'équipe Mestoits`,
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between pt-4 border-t border-gray-200">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-4 border-t border-gray-200 gap-3">
                     <div className="text-sm text-gray-600">
                       <span>Propriétaire: </span>
                       <span className="font-medium text-gray-900">{reservation.owner_name || 'Non disponible'}</span>
@@ -389,17 +390,44 @@ L'équipe Mestoits`,
                         </div>
                       )}
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          generateReservationReceiptPDF({
+                            id: reservation.id,
+                            property_title: reservation.property_title || 'Bien immobilier',
+                            property_address: reservation.property_address,
+                            property_city: reservation.property_city,
+                            owner_name: reservation.owner_name || 'Propriétaire',
+                            owner_email: reservation.owner_email,
+                            owner_phone: reservation.owner_phone,
+                            guest_name: reservation.guest_name,
+                            guest_email: reservation.guest_email,
+                            guest_phone: reservation.guest_phone,
+                            start_date: reservation.start_date,
+                            end_date: reservation.end_date,
+                            nights: reservation.nights,
+                            total_amount: reservation.total_amount,
+                            status: reservation.status,
+                            created_at: reservation.created_at,
+                          });
+                        }}
+                        className="px-3 sm:px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
+                      >
+                        <i className="ri-file-download-line text-sm sm:text-base"></i>
+                        <span>Télécharger le récépissé</span>
+                      </button>
                       {reservation.status === 'pending' && (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleCancelReservation(reservation);
                           }}
-                          className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
+                          className="px-3 sm:px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
                         >
-                          <i className="ri-close-line mr-2"></i>
-                          Annuler
+                          <i className="ri-close-line text-sm sm:text-base"></i>
+                          <span>Annuler</span>
                         </button>
                       )}
                       <button
@@ -411,10 +439,10 @@ L'équipe Mestoits`,
                             phone: reservation.owner_phone,
                           });
                         }}
-                        className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm font-medium"
+                        className="px-3 sm:px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
                       >
-                        <i className="ri-message-3-line mr-2"></i>
-                        Contacter
+                        <i className="ri-message-3-line text-sm sm:text-base"></i>
+                        <span>Contacter</span>
                       </button>
                     </div>
                   </div>

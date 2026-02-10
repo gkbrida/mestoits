@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { generateReservationReceiptPDF } from '../../../utils/reservationReceiptPdfGenerator';
 
 interface ReservationsPageProps {
   userId: string;
@@ -332,43 +333,99 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Bien</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Client</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Dates</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Nuits</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Montant</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Statut</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Bien</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Client</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase hidden sm:table-cell">Dates</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase hidden md:table-cell">Nuits</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Montant</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase hidden lg:table-cell">Statut</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-xs font-semibold text-gray-700 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {reservations.map((reservation) => (
                   <tr key={reservation.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-sm text-gray-900">{reservation.property_title}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900">
-                      <div>{reservation.guest_name}</div>
+                    <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-900 break-words">{reservation.property_title}</td>
+                    <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-900">
+                      <div className="break-words">{reservation.guest_name}</div>
                       {reservation.guest_phone && (
                         <div className="text-xs text-gray-500">{reservation.guest_phone}</div>
                       )}
+                      <div className="sm:hidden text-xs text-gray-500 mt-1">
+                        {new Date(reservation.start_date).toLocaleDateString('fr-FR')} - {new Date(reservation.end_date).toLocaleDateString('fr-FR')}
+                      </div>
+                      <div className="sm:hidden text-xs text-gray-500">
+                        {reservation.nights} nuit{reservation.nights > 1 ? 's' : ''}
+                      </div>
+                      <div className="sm:hidden mt-1">
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
+                          {getStatusLabel(reservation.status)}
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-600">
+                    <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-600 hidden sm:table-cell">
                       <div>{new Date(reservation.start_date).toLocaleDateString('fr-FR')}</div>
                       <div className="text-xs text-gray-500">au {new Date(reservation.end_date).toLocaleDateString('fr-FR')}</div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-900">{reservation.nights}</td>
-                    <td className="px-4 py-3 text-sm font-semibold text-gray-900">
+                    <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-900 hidden md:table-cell">{reservation.nights}</td>
+                    <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm font-semibold text-gray-900">
                       {reservation.total_amount.toLocaleString('fr-FR')} FCFA
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 sm:px-4 py-3 hidden lg:table-cell">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
                         {getStatusLabel(reservation.status)}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          onClick={async () => {
+                            try {
+                              // Charger les données complètes pour le PDF
+                              const [propertyData, ownerData] = await Promise.all([
+                                supabase
+                                  .from('properties_02')
+                                  .select('title, address, city')
+                                  .eq('id', reservation.property_id)
+                                  .single(),
+                                supabase
+                                  .from('users_2025_12_01_11_29')
+                                  .select('full_name, email, phone')
+                                  .eq('id', userId)
+                                  .single(),
+                              ]);
+
+                              generateReservationReceiptPDF({
+                                id: reservation.id,
+                                property_title: propertyData.data?.title || reservation.property_title || 'Bien immobilier',
+                                property_address: propertyData.data?.address,
+                                property_city: propertyData.data?.city,
+                                owner_name: ownerData.data?.full_name || 'Propriétaire',
+                                owner_email: ownerData.data?.email,
+                                owner_phone: ownerData.data?.phone,
+                                guest_name: reservation.guest_name,
+                                guest_email: reservation.guest_email,
+                                guest_phone: reservation.guest_phone,
+                                start_date: reservation.start_date,
+                                end_date: reservation.end_date,
+                                nights: reservation.nights,
+                                total_amount: reservation.total_amount,
+                                status: reservation.status,
+                                created_at: reservation.created_at,
+                              });
+                            } catch (error: any) {
+                              console.error('Erreur lors de la génération du PDF:', error);
+                              alert(`Erreur lors de la génération du PDF: ${error.message}`);
+                            }
+                          }}
+                          className="p-2 hover:bg-green-50 rounded-lg transition-colors cursor-pointer"
+                          title="Télécharger le récépissé"
+                        >
+                          <i className="ri-file-download-line text-green-600"></i>
+                        </button>
                         <button
                           onClick={() => handleEdit(reservation)}
                           className="p-2 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"

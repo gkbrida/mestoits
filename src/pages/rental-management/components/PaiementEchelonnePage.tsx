@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { generateInstallmentPaymentReceiptPDF } from '../../../utils/installmentPaymentReceiptPdfGenerator';
 
 
 interface PaiementEchelonnePageProps {
@@ -598,9 +599,9 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         ) : (
           plans.map((plan) => (
             <div key={plan.id} className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 md:p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">{plan.property_title}</h3>
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-4 gap-3">
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-1 break-words">{plan.property_title}</h3>
                   {/* Informations supplémentaires du bien */}
                   <div className="flex flex-wrap gap-3 text-sm text-gray-600 mb-2">
                     {plan.property_location && (
@@ -684,7 +685,55 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                     </div>
                   )}
                 </div>
-                <div className="flex items-center gap-2 ml-4">
+                <div className="flex items-center gap-2 ml-4 flex-wrap">
+                  <button
+                    onClick={async () => {
+                      try {
+                        // Charger les données complètes pour le PDF
+                        const [propertyData, ownerData] = await Promise.all([
+                          supabase
+                            .from('properties_02')
+                            .select('title, address, city')
+                            .eq('id', plan.property_id)
+                            .single(),
+                          supabase
+                            .from('users_2025_12_01_11_29')
+                            .select('full_name, email, phone')
+                            .eq('id', userId)
+                            .single(),
+                        ]);
+
+                        generateInstallmentPaymentReceiptPDF({
+                          id: plan.id,
+                          property_title: propertyData.data?.title || plan.property_title || 'Bien immobilier',
+                          property_address: propertyData.data?.address,
+                          property_city: propertyData.data?.city,
+                          owner_name: ownerData.data?.full_name || 'Propriétaire',
+                          owner_email: ownerData.data?.email,
+                          owner_phone: ownerData.data?.phone,
+                          payer_name: plan.payer_first_name && plan.payer_last_name 
+                            ? `${plan.payer_first_name} ${plan.payer_last_name}` 
+                            : 'Payeur',
+                          payer_email: plan.payer_email,
+                          payer_phone: plan.payer_phone,
+                          total_amount: plan.total_amount,
+                          number_of_installments: plan.number_of_installments,
+                          installment_amount: plan.installment_amount,
+                          frequency: plan.frequency,
+                          start_date: plan.start_date,
+                          status: plan.status,
+                          payments: plan.payments,
+                        });
+                      } catch (error: any) {
+                        console.error('Erreur lors de la génération du PDF:', error);
+                        alert(`Erreur lors de la génération du PDF: ${error.message}`);
+                      }
+                    }}
+                    className="p-2 hover:bg-green-50 rounded-lg transition-colors cursor-pointer"
+                    title="Télécharger le bordereau"
+                  >
+                    <i className="ri-file-download-line text-green-600"></i>
+                  </button>
                   <button
                     onClick={() => handleEdit(plan)}
                     className="p-2 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"

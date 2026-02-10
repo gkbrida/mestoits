@@ -105,8 +105,8 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
         setLeaseFormData(prev => ({
           ...prev,
           monthly_rent: selectedProperty.price ? selectedProperty.price.toString() : prev.monthly_rent,
-          security_deposit: selectedProperty.security_deposit ? selectedProperty.security_deposit.toString() : prev.security_deposit,
-          advance_rent_amount: selectedProperty.advance_rent ? selectedProperty.advance_rent.toString() : prev.advance_rent_amount,
+          security_deposit: selectedProperty.deposit_months ? (selectedProperty.deposit_months * selectedProperty.price).toString() : prev.security_deposit.toString(),
+          advance_rent_amount: selectedProperty.advance_months ? (selectedProperty.advance_months * selectedProperty.price).toString() : prev.advance_rent_amount.toString(),
         }));
       }
     }
@@ -127,7 +127,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     try {
       const { data, error } = await supabase
         .from('properties_02')
-        .select('id, title, address, city, price, security_deposit, advance_rent')
+        .select('id, title, address, city, price, deposit_months, advance_months')
         .eq('owner_id', userId)
         .eq('operation_type', 'rental') // Uniquement les biens en location longue durée
         .or('status.eq.active,status.eq.available')

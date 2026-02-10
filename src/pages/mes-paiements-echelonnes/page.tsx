@@ -6,6 +6,7 @@ import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
 import PaymentResult from '../tenant-rentals/components/PaymentResult';
+import { generateInstallmentPaymentReceiptPDF } from '../../utils/installmentPaymentReceiptPdfGenerator';
 
 interface InstallmentPlan {
   id: string;
@@ -511,10 +512,10 @@ export default function MesPaiementsEchelonnesPage() {
                     className="bg-white rounded-lg border border-gray-200 p-6 cursor-pointer hover:shadow-md transition-shadow"
                   >
                     <div className="mb-4">
-                      <h3 className="text-xl font-semibold text-gray-900 mb-1">
+                      <h3 className="text-lg sm:text-xl font-semibold text-gray-900 mb-1 break-words">
                         {plan.property_title || 'Bien immobilier'}
                       </h3>
-                      <p className="text-sm text-gray-600">
+                      <p className="text-xs sm:text-sm text-gray-600 break-words">
                         {plan.property_address && plan.property_city 
                           ? `${plan.property_address}, ${plan.property_city}`
                           : 'Adresse non disponible'}
@@ -556,24 +557,56 @@ export default function MesPaiementsEchelonnesPage() {
                     </div>
 
                     <div className="border-t border-gray-200 pt-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="font-medium text-gray-900">Échéances disponibles</h4>
-                        {plan.owner_name && (
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-2">
+                        <h4 className="font-medium text-gray-900 text-sm sm:text-base">Échéances disponibles</h4>
+                        <div className="flex flex-wrap gap-2">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleContactOwner({
-                                name: plan.owner_name,
-                                email: plan.owner_email,
-                                phone: plan.owner_phone,
-                              }, plan);
+                              generateInstallmentPaymentReceiptPDF({
+                                id: plan.id,
+                                property_title: plan.property_title || 'Bien immobilier',
+                                property_address: plan.property_address,
+                                property_city: plan.property_city,
+                                owner_name: plan.owner_name || 'Propriétaire',
+                                owner_email: plan.owner_email,
+                                owner_phone: plan.owner_phone,
+                                payer_name: userEmail ? 'Client' : 'Payeur',
+                                payer_email: userEmail,
+                                payer_phone: userPhone,
+                                total_amount: plan.total_amount,
+                                number_of_installments: plan.number_of_installments,
+                                installment_amount: plan.installment_amount,
+                                start_date: plan.start_date,
+                                frequency: plan.frequency,
+                                payment_due_day: plan.payment_due_day,
+                                status: plan.status,
+                                payments: plan.payments || [],
+                              });
                             }}
-                            className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-sm font-medium"
+                            className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1.5"
                           >
-                            <i className="ri-message-3-line mr-1.5"></i>
-                            Contacter le propriétaire
+                            <i className="ri-file-download-line text-sm"></i>
+                            <span>Télécharger le bordereau</span>
                           </button>
-                        )}
+                          {plan.owner_name && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleContactOwner({
+                                  name: plan.owner_name,
+                                  email: plan.owner_email,
+                                  phone: plan.owner_phone,
+                                }, plan);
+                              }}
+                              className="px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1.5"
+                            >
+                              <i className="ri-message-3-line text-sm"></i>
+                              <span className="hidden sm:inline">Contacter le propriétaire</span>
+                              <span className="sm:hidden">Contacter</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {pendingPayments.length === 0 ? (
                         <p className="text-sm text-gray-600">Aucune échéance disponible pour le moment</p>
@@ -582,18 +615,18 @@ export default function MesPaiementsEchelonnesPage() {
                           {pendingPayments.map((payment) => (
                             <div
                               key={payment.id}
-                              className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                              className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-3 bg-gray-50 rounded-lg gap-3"
                             >
-                              <div>
-                                <div className="font-medium text-gray-900">
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium text-gray-900 text-sm sm:text-base">
                                   Échéance {payment.installment_number} / {plan.number_of_installments}
                                 </div>
-                                <div className="text-sm text-gray-600">
+                                <div className="text-xs sm:text-sm text-gray-600">
                                   Échéance le {formatDate(payment.due_date)}
                                 </div>
                               </div>
-                              <div className="flex items-center gap-3">
-                                <span className="font-semibold text-teal-600">
+                              <div className="flex items-center justify-between sm:justify-end gap-3">
+                                <span className="font-semibold text-teal-600 text-sm sm:text-base">
                                   {formatPrice(payment.amount)} FCFA
                                 </span>
                                 <button
@@ -601,7 +634,7 @@ export default function MesPaiementsEchelonnesPage() {
                                     e.stopPropagation();
                                     handlePayInstallment(payment, plan);
                                   }}
-                                  className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-sm font-medium"
+                                  className="px-3 sm:px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-xs sm:text-sm font-medium whitespace-nowrap"
                                 >
                                   Payer
                                 </button>

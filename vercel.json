@@ -33,6 +33,14 @@
     {
       "path": "/api/cron-reservation-reminder",
       "schedule": "00 17 * * *"
+    },
+    {
+      "path": "/api/cron-lease-expiration-reminder",
+      "schedule": "00 17 * * *"
+    },
+    {
+      "path": "/api/cron-lease-auto-renewal",
+      "schedule": "00 17 * * *"
     }
   ]
 }

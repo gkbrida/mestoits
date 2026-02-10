@@ -44,6 +44,8 @@ type EmailType =
   | 'modification_bail'
   | 'bail_cloture'
   | 'bail_annule'
+  | 'bail_fin_proche'
+  | 'bail_reconduit'
   | 'document_professionnel_ajoute'
   | 'document_professionnel_valide'
   | 'document_professionnel_rejete'
@@ -328,6 +330,10 @@ function buildEmailPayload(
       return buildProfessionnelCertifieEmail(data);
     case 'modification_bail':
       return buildModificationBailEmail(data);
+    case 'bail_fin_proche':
+      return buildBailFinProcheEmail(data);
+    case 'bail_reconduit':
+      return buildBailReconduitEmail(data);
     default:
       console.warn(`Type d'email non implémenté: ${type}`);
       return null;
@@ -2362,6 +2368,274 @@ L'équipe Mestoits`;
   return {
     to: tenantEmail,
     subject: `Modification du contrat de bail - ${propertyTitle || 'Votre bien'}`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Construit l'email de notification pour une fin de bail proche (60 jours avant)
+ */
+function buildBailFinProcheEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const recipientEmail = data.recipientEmail as string;
+  const recipientName = data.recipientName as string;
+  const otherPartyName = data.otherPartyName as string;
+  const propertyTitle = data.propertyTitle as string | undefined;
+  const propertyAddress = data.propertyAddress as string | undefined;
+  const propertyCity = data.propertyCity as string | undefined;
+  const endDate = data.endDate as string;
+  const isOwner = data.isOwner as boolean;
+  const appUrl = data.appUrl as string | undefined || 'https://mestoits.com';
+
+  if (!recipientEmail || !recipientName || !otherPartyName || !endDate) {
+    console.error('Données manquantes pour l\'email de fin de bail proche');
+    return null;
+  }
+
+  const formatDate = (dateStr: string): string => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const propertyInfo = propertyTitle || propertyAddress || propertyCity
+    ? `<div class="info-box">
+        <h3 style="margin-top: 0; color: #f59e0b;">Bien concerné</h3>
+        ${propertyTitle ? `<p><strong>${propertyTitle}</strong></p>` : ''}
+        ${propertyAddress || propertyCity ? `<p>${[propertyAddress, propertyCity].filter(Boolean).join(', ')}</p>` : ''}
+      </div>`
+    : '';
+
+  const recipientRole = isOwner ? 'propriétaire' : 'locataire';
+  const otherPartyRole = isOwner ? 'locataire' : 'propriétaire';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+    .info-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b; }
+    .warning-box { background: #fef3c7; border: 2px solid #f59e0b; padding: 25px; text-align: center; margin: 25px 0; border-radius: 8px; }
+    .warning-box .icon { font-size: 48px; margin-bottom: 10px; }
+    .button { display: inline-block; background: #f59e0b; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: bold; }
+    .button:hover { background: #d97706; }
+    .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>⏰ Fin de bail proche</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour <strong>${recipientName}</strong>,</p>
+      <p>Nous vous informons que votre contrat de bail arrive à échéance dans <strong>60 jours</strong>.</p>
+      ${propertyInfo}
+      <div class="warning-box">
+        <div class="icon">📅</div>
+        <p style="margin: 0; color: #92400e; font-size: 18px; font-weight: bold;">Date de fin du bail</p>
+        <p style="margin: 5px 0 0 0; color: #78350f; font-size: 16px;">${formatDate(endDate)}</p>
+      </div>
+      <div class="info-box">
+        <h3 style="margin-top: 0; color: #f59e0b;">Informations importantes</h3>
+        <p><strong>${isOwner ? 'Locataire' : 'Propriétaire'} :</strong> ${otherPartyName}</p>
+        <p><strong>Date de fin du bail :</strong> ${formatDate(endDate)}</p>
+        <p><strong>Jours restants :</strong> 60 jours</p>
+      </div>
+      ${isOwner ? `
+      <div class="info-box" style="border-left-color: #14b8a6;">
+        <h3 style="margin-top: 0; color: #14b8a6;">Actions à prévoir</h3>
+        <p>En tant que propriétaire, vous pouvez :</p>
+        <ul>
+          <li>Clôturer le bail si vous ne souhaitez pas le reconduire</li>
+          <li>Laisser le bail se reconduire automatiquement d'un an si aucune action n'est effectuée avant la date de fin</li>
+          <li>Contacter votre locataire pour discuter de la reconduction</li>
+        </ul>
+      </div>
+      ` : `
+      <div class="info-box" style="border-left-color: #14b8a6;">
+        <h3 style="margin-top: 0; color: #14b8a6;">Information importante</h3>
+        <p>Si votre propriétaire ne clôture pas le bail avant la date de fin, celui-ci sera automatiquement reconduit d'un an supplémentaire.</p>
+        <p>Nous vous recommandons de contacter votre propriétaire pour discuter de la reconduction ou de la fin du bail.</p>
+      </div>
+      `}
+      <p style="text-align: center;">
+        <a href="${appUrl}${isOwner ? '/gestion-locative' : '/mes-locations'}" class="button">Consulter mon bail</a>
+      </p>
+      <p>Cordialement,<br><strong>L'équipe Mestoits</strong></p>
+    </div>
+    <div class="footer">
+      <p>Cet email a été envoyé automatiquement par Mestoits</p>
+      <p>© ${new Date().getFullYear()} Mestoits - Tous droits réservés</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${recipientName},
+
+Nous vous informons que votre contrat de bail arrive à échéance dans 60 jours.
+
+${propertyTitle ? `Bien concerné: ${propertyTitle}\n` : ''}${propertyAddress || propertyCity ? `Adresse: ${[propertyAddress, propertyCity].filter(Boolean).join(', ')}\n` : ''}
+Informations importantes:
+- ${isOwner ? 'Locataire' : 'Propriétaire'}: ${otherPartyName}
+- Date de fin du bail: ${formatDate(endDate)}
+- Jours restants: 60 jours
+
+${isOwner ? `
+Actions à prévoir:
+En tant que propriétaire, vous pouvez :
+- Clôturer le bail si vous ne souhaitez pas le reconduire
+- Laisser le bail se reconduire automatiquement d'un an si aucune action n'est effectuée avant la date de fin
+- Contacter votre locataire pour discuter de la reconduction
+` : `
+Information importante:
+Si votre propriétaire ne clôture pas le bail avant la date de fin, celui-ci sera automatiquement reconduit d'un an supplémentaire.
+Nous vous recommandons de contacter votre propriétaire pour discuter de la reconduction ou de la fin du bail.
+`}
+
+Cordialement,
+L'équipe Mestoits`;
+
+  return {
+    to: recipientEmail,
+    subject: `Fin de bail proche - ${propertyTitle || 'Contrat de location'}`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Construit l'email de notification pour une reconduction automatique de bail
+ */
+function buildBailReconduitEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const recipientEmail = data.recipientEmail as string;
+  const recipientName = data.recipientName as string;
+  const otherPartyName = data.otherPartyName as string;
+  const propertyTitle = data.propertyTitle as string | undefined;
+  const propertyAddress = data.propertyAddress as string | undefined;
+  const propertyCity = data.propertyCity as string | undefined;
+  const oldEndDate = data.oldEndDate as string;
+  const newEndDate = data.newEndDate as string;
+  const isOwner = data.isOwner as boolean;
+  const appUrl = data.appUrl as string | undefined || 'https://mestoits.com';
+
+  if (!recipientEmail || !recipientName || !otherPartyName || !oldEndDate || !newEndDate) {
+    console.error('Données manquantes pour l\'email de reconduction de bail');
+    return null;
+  }
+
+  const formatDate = (dateStr: string): string => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const propertyInfo = propertyTitle || propertyAddress || propertyCity
+    ? `<div class="info-box">
+        <h3 style="margin-top: 0; color: #14b8a6;">Bien concerné</h3>
+        ${propertyTitle ? `<p><strong>${propertyTitle}</strong></p>` : ''}
+        ${propertyAddress || propertyCity ? `<p>${[propertyAddress, propertyCity].filter(Boolean).join(', ')}</p>` : ''}
+      </div>`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+    .info-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #14b8a6; }
+    .success-box { background: #d1fae5; border: 2px solid #14b8a6; padding: 25px; text-align: center; margin: 25px 0; border-radius: 8px; }
+    .success-box .icon { font-size: 48px; margin-bottom: 10px; }
+    .button { display: inline-block; background: #14b8a6; color: white; padding: 12px 30px; text-decoration: none; border-radius: 6px; margin: 20px 0; font-weight: bold; }
+    .button:hover { background: #0d9488; }
+    .footer { text-align: center; margin-top: 30px; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>✅ Bail reconduit automatiquement</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour <strong>${recipientName}</strong>,</p>
+      <p>Nous vous informons que votre contrat de bail a été <strong>automatiquement reconduit d'un an supplémentaire</strong>.</p>
+      ${propertyInfo}
+      <div class="success-box">
+        <div class="icon">🔄</div>
+        <p style="margin: 0; color: #065f46; font-size: 18px; font-weight: bold;">Reconduction automatique</p>
+        <p style="margin: 5px 0 0 0; color: #047857; font-size: 14px;">Le bail a été prolongé d'un an</p>
+      </div>
+      <div class="info-box">
+        <h3 style="margin-top: 0; color: #14b8a6;">Détails de la reconduction</h3>
+        <p><strong>${isOwner ? 'Locataire' : 'Propriétaire'} :</strong> ${otherPartyName}</p>
+        <p><strong>Date de fin précédente :</strong> ${formatDate(oldEndDate)}</p>
+        <p><strong>Nouvelle date de fin :</strong> ${formatDate(newEndDate)}</p>
+        <p><strong>Durée de la reconduction :</strong> 1 an</p>
+      </div>
+      <div class="info-box" style="border-left-color: #f59e0b;">
+        <h3 style="margin-top: 0; color: #f59e0b;">Information importante</h3>
+        <p>Le bail a été reconduit automatiquement car aucune action de clôture n'a été effectuée par le propriétaire avant la date de fin initiale.</p>
+        <p>Toutes les conditions du bail restent inchangées, seule la date de fin a été modifiée.</p>
+      </div>
+      <p style="text-align: center;">
+        <a href="${appUrl}${isOwner ? '/gestion-locative' : '/mes-locations'}" class="button">Consulter mon bail</a>
+      </p>
+      <p>Cordialement,<br><strong>L'équipe Mestoits</strong></p>
+    </div>
+    <div class="footer">
+      <p>Cet email a été envoyé automatiquement par Mestoits</p>
+      <p>© ${new Date().getFullYear()} Mestoits - Tous droits réservés</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${recipientName},
+
+Nous vous informons que votre contrat de bail a été automatiquement reconduit d'un an supplémentaire.
+
+${propertyTitle ? `Bien concerné: ${propertyTitle}\n` : ''}${propertyAddress || propertyCity ? `Adresse: ${[propertyAddress, propertyCity].filter(Boolean).join(', ')}\n` : ''}
+Détails de la reconduction:
+- ${isOwner ? 'Locataire' : 'Propriétaire'}: ${otherPartyName}
+- Date de fin précédente: ${formatDate(oldEndDate)}
+- Nouvelle date de fin: ${formatDate(newEndDate)}
+- Durée de la reconduction: 1 an
+
+Information importante:
+Le bail a été reconduit automatiquement car aucune action de clôture n'a été effectuée par le propriétaire avant la date de fin initiale.
+Toutes les conditions du bail restent inchangées, seule la date de fin a été modifiée.
+
+Cordialement,
+L'équipe Mestoits`;
+
+  return {
+    to: recipientEmail,
+    subject: `Bail reconduit automatiquement - ${propertyTitle || 'Contrat de location'}`,
     html,
     text,
   };

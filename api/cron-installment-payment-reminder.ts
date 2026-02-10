@@ -2,6 +2,19 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import nodemailer from 'nodemailer';
 
+// Type pour le transporter nodemailer
+// Utilisation d'une interface basée sur les méthodes utilisées par nodemailer
+interface Transporter {
+  sendMail(options: {
+    from?: string;
+    to: string;
+    subject: string;
+    html: string;
+    text?: string;
+  }): Promise<any>;
+  verify?(): Promise<void>;
+}
+
 /**
  * Cron job pour envoyer des rappels de paiement échelonné
  * S'exécute quotidiennement et envoie des emails aux payeurs et créateurs
@@ -262,7 +275,7 @@ async function processPayerReminders(
   plansMap: Map<string, any>,
   propertiesMap: Map<string, any>,
   ownersMap: Map<string, any>,
-  transporter: nodemailer.Transporter,
+  transporter: Transporter,
   daysUntilDue: number
 ): Promise<number> {
   let processed = 0;
@@ -367,7 +380,7 @@ async function processOwnerNotifications(
   plansMap: Map<string, any>,
   propertiesMap: Map<string, any>,
   ownersMap: Map<string, any>,
-  transporter: nodemailer.Transporter
+  transporter: Transporter
 ): Promise<number> {
   let processed = 0;
 
