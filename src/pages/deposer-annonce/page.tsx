@@ -11,6 +11,7 @@ import MediasStep from './components/MediasStep';
 import PreviewStep from './components/PreviewStep';
 import { usePropertyTypes } from '../../hooks/usePropertyTypes';
 import { useOperationTypes } from '../../hooks/useOperationTypes';
+import { canUserPublishProperty, recordPropertyPublication } from '../../utils/subscriptionUtils';
 interface PropertyData {
   // Informations de base
   title: string;
@@ -566,6 +567,16 @@ export default function DeposerAnnoncePage() {
       return;
     }
 
+    // Vérifier les restrictions d'abonnement (sauf pour les locations courte durée qui sont toujours gratuites)
+    const operationType = dataWithTitle.operation_type || dataWithTitle.offer_type;
+    if (operationType !== 'short-term-rental') {
+      const canPublish = await canUserPublishProperty(user.id, operationType);
+      if (!canPublish) {
+        alert('Vous avez atteint la limite de publications autorisées pour votre plan d\'abonnement. Veuillez mettre à jour votre abonnement pour publier plus d\'annonces.');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       // Fonction pour uploader les images base64 restantes vers Supabase Storage
@@ -822,8 +833,11 @@ export default function DeposerAnnoncePage() {
       // Enregistrer la publication pour les restrictions
       if (data) {
         try {
-          const { recordPropertyPublication } = await import('../../utils/subscriptionUtils');
-          await recordPropertyPublication(user.id, data.id);
+          // Enregistrer la publication uniquement si ce n'est pas une location courte durée
+          // (les locations courte durée sont gratuites et ne comptent pas dans les limites)
+          if (operationType !== 'short-term-rental') {
+            await recordPropertyPublication(user.id, data.id);
+          }
         } catch (error) {
           console.error('Erreur lors de l\'enregistrement de la publication:', error);
         }

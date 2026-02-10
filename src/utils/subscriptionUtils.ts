@@ -51,18 +51,26 @@ export async function areRestrictionsEnabled(): Promise<boolean> {
 
 /**
  * Vérifie si un utilisateur peut publier une annonce
+ * @param userId - ID de l'utilisateur
+ * @param operationType - Type d'opération (optionnel). Si 'short-term-rental', la publication est toujours gratuite
  */
-export async function canUserPublishProperty(userId: string): Promise<boolean> {
+export async function canUserPublishProperty(userId: string, operationType?: string): Promise<boolean> {
   try {
+    // Si c'est une location courte durée, toujours autoriser (gratuit pour tous)
+    if (operationType === 'short-term-rental') {
+      return true;
+    }
+
     const restrictionsEnabled = await areRestrictionsEnabled();
     
     if (!restrictionsEnabled) {
       return true; // Si les restrictions sont désactivées, autoriser
     }
 
-    // Appeler la fonction PostgreSQL
+    // Appeler la fonction PostgreSQL avec le type d'opération
     const { data, error } = await supabase.rpc('can_user_publish_property', {
-      user_uuid: userId
+      user_uuid: userId,
+      operation_type: operationType || null
     });
 
     if (error) {
@@ -123,6 +131,35 @@ export async function recordPropertyPublication(userId: string, propertyId: stri
     }
   } catch (error) {
     console.error('Erreur lors de l\'enregistrement de la publication:', error);
+  }
+}
+
+/**
+ * Active un abonnement pour un utilisateur
+ */
+export async function activateSubscription(userId: string, planId: string): Promise<void> {
+  try {
+    // Désactiver l'ancien abonnement actif
+    await supabase
+      .from('user_subscriptions')
+      .update({ status: 'cancelled' })
+      .eq('user_id', userId)
+      .eq('status', 'active');
+
+    // Créer le nouvel abonnement
+    const { error } = await supabase
+      .from('user_subscriptions')
+      .insert({
+        user_id: userId,
+        plan_id: planId,
+        start_date: new Date().toISOString().split('T')[0],
+        status: 'active'
+      });
+
+    if (error) throw error;
+  } catch (error) {
+    console.error('Erreur lors de l\'activation de l\'abonnement:', error);
+    throw error;
   }
 }
 

@@ -97,7 +97,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     }
   }, [leaseId, leases]);
 
-  // Préremplir le loyer mensuel et le dépôt de garantie quand un bien est sélectionné
+  // Préremplir le loyer mensuel, le dépôt de garantie et l'avance sur loyer quand un bien est sélectionné
   useEffect(() => {
     if (leaseFormData.property_id && availableProperties.length > 0) {
       const selectedProperty = availableProperties.find(p => p.id === leaseFormData.property_id);
@@ -106,6 +106,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
           ...prev,
           monthly_rent: selectedProperty.price ? selectedProperty.price.toString() : prev.monthly_rent,
           security_deposit: selectedProperty.security_deposit ? selectedProperty.security_deposit.toString() : prev.security_deposit,
+          advance_rent_amount: selectedProperty.advance_rent ? selectedProperty.advance_rent.toString() : prev.advance_rent_amount,
         }));
       }
     }

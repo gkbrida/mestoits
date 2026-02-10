@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
@@ -10,6 +10,7 @@ import ProfessionalTab from './components/ProfessionalTab';
 import SecurityTab from './components/SecurityTab';
 export default function ProfilPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'personal' | 'professional' | 'security'>('personal');
@@ -17,6 +18,14 @@ export default function ProfilPage() {
   useEffect(() => {
     checkAuth();
   }, []);
+
+  // Gérer l'onglet depuis l'URL
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam === 'professional') {
+      setActiveTab('professional');
+    }
+  }, [searchParams]);
 
   const checkAuth = async () => {
     try {

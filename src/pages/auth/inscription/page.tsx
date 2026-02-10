@@ -104,30 +104,82 @@ export default function InscriptionPage() {
       }
 
       if (authData.user) {
+        // Traiter le code d'affiliation si fourni (AVANT la création du profil)
+        let affiliatedById: string | null = null;
+        
+        if (formData.affiliationCode && formData.affiliationCode.trim()) {
+          try {
+            const { data: referrer, error: referrerError } = await supabase
+              .from('users_2025_12_01_11_29')
+              .select('id')
+              .eq('affiliation_code', formData.affiliationCode.trim().toUpperCase())
+              .maybeSingle();
+
+            if (referrerError) {
+              console.error('Erreur lors de la recherche du code d\'affiliation:', referrerError);
+              // On continue même si la recherche échoue, mais on n'associe pas d'affiliation
+            } else if (referrer && referrer.id) {
+              // Vérifier que l'ID référencé n'est pas le même que celui de l'utilisateur en cours de création
+              if (referrer.id !== authData.user.id) {
+                affiliatedById = referrer.id;
+              } else {
+                console.warn('Un utilisateur ne peut pas s\'affilier à lui-même');
+              }
+            } else {
+              // Code d'affiliation invalide, mais on ne bloque pas l'inscription
+              console.warn(`Code d'affiliation invalide: ${formData.affiliationCode}`);
+            }
+          } catch (err) {
+            console.error('Erreur lors du traitement du code d\'affiliation:', err);
+            // On continue même en cas d'erreur
+          }
+        }
+
         // Créer ou mettre à jour le profil utilisateur (upsert)
         // Cela évite les erreurs de clé dupliquée si l'utilisateur existe déjà
+        const profileData: any = {
+          id: authData.user.id,
+          email: formData.email.toLowerCase().trim(),
+          full_name: `${formData.firstName} ${formData.lastName}`,
+          phone: formData.phone,
+          user_type: isProfessional ? 'professional' : 'individual',
+          company_name: isProfessional ? formData.companyName : null,
+          siret: isProfessional ? formData.siret : null,
+          professional_card: isProfessional ? formData.professionalCard : null,
+          company_address: isProfessional ? formData.companyAddress : null,
+          city: isProfessional ? formData.city : null,
+          is_verified: false,
+        };
+
+        // Ajouter affiliated_by si un code d'affiliation valide a été trouvé
+        // Ne pas définir si null pour éviter les problèmes de contrainte
+        if (affiliatedById) {
+          profileData.affiliated_by = affiliatedById;
+        }
+
+        // Utiliser INSERT avec ON CONFLICT plutôt que UPSERT pour éviter les problèmes de trigger
         const { error: profileError } = await supabase
           .from('users_2025_12_01_11_29')
-          .upsert({
-            id: authData.user.id,
-            email: formData.email,
-            full_name: `${formData.firstName} ${formData.lastName}`,
-            phone: formData.phone,
-            user_type: isProfessional ? 'professional' : 'individual',
-            company_name: isProfessional ? formData.companyName : null,
-            siret: isProfessional ? formData.siret : null,
-            professional_card: isProfessional ? formData.professionalCard : null,
-            company_address: isProfessional ? formData.companyAddress : null,
-            city: isProfessional ? formData.city : null,
-            is_verified: false,
-          }, {
-            onConflict: 'id'
-          });
+          .insert(profileData)
+          .select()
+          .single();
 
+        // Si l'insertion échoue à cause d'un conflit, essayer un update
         if (profileError) {
-          // Si l'erreur persiste, on la log mais on continue car l'utilisateur est créé dans auth.users
-          console.error('Erreur lors de la création du profil:', profileError);
-          // On ne bloque pas l'inscription car l'utilisateur est déjà créé dans auth.users
+          if (profileError.code === '23505') { // Violation de contrainte unique
+            console.warn('Profil existe déjà, mise à jour...');
+            const { error: updateError } = await supabase
+              .from('users_2025_12_01_11_29')
+              .update(profileData)
+              .eq('id', authData.user.id);
+            
+            if (updateError) {
+              console.error('Erreur lors de la mise à jour du profil:', updateError);
+            }
+          } else {
+            console.error('Erreur lors de la création du profil:', profileError);
+            // On ne bloque pas l'inscription car l'utilisateur est déjà créé dans auth.users
+          }
         }
 
         setShowSuccess(true);

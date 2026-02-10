@@ -28,6 +28,8 @@ const MesReservationsPage = lazy(() => import('../pages/mes-reservations/page'))
 const MesPaiementsEchelonnesPage = lazy(() => import('../pages/mes-paiements-echelonnes/page'));
 const AffiliationPage = lazy(() => import('../pages/affiliation/page'));
 const AffilierRedirectPage = lazy(() => import('../pages/affilier/page'));
+const AbonnementsPage = lazy(() => import('../pages/abonnements/page'));
+const PaiementEcheancesPage = lazy(() => import('../pages/paiement-echeances/page'));
 const AidePage = lazy(() => import('../pages/aide/page'));
 const AProposPage = lazy(() => import('../pages/a-propos/page'));
 const MentionsLegalesPage = lazy(() => import('../pages/mentions-legales/page'));
@@ -130,6 +132,14 @@ const routes: RouteObject[] = [
   {
     path: '/mes-paiements-echelonnes',
     element: <MesPaiementsEchelonnesPage />,
+  },
+  {
+    path: '/abonnements',
+    element: <AbonnementsPage />,
+  },
+  {
+    path: '/paiement-echeances',
+    element: <PaiementEcheancesPage />,
   },
   {
     path: '/affiliation',

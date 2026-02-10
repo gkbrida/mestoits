@@ -405,93 +405,144 @@ export default function TenantRentalsPage() {
         console.error('Erreur lors de la recherche du locataire:', tenantError);
       }
 
-      // Si aucun locataire trouvé, pas de baux à afficher
-      if (!tenantData) {
-        setRentals([]);
-        setLoading(false);
-        return;
+      // Charger les baux pour ce locataire (si trouvé) OU pour l'utilisateur directement (compatibilité)
+      let leasesData: any[] = [];
+      let leasesError: any = null;
+
+      // 1. Si un locataire est trouvé, charger les baux avec tenant_id
+      if (tenantData) {
+        console.log('✅ Locataire trouvé, chargement des baux avec tenant_id:', tenantData.id);
+        const { data, error } = await supabase
+          .from('leases')
+          .select('*')
+          .eq('tenant_id', tenantData.id)
+          .in('status', ['active', 'pending_signature', 'terminated'])
+          .order('created_at', { ascending: false });
+        
+        if (error) {
+          console.error('Erreur lors du chargement des baux avec tenant_id:', error);
+          leasesError = error;
+        } else if (data) {
+          leasesData = data;
+        }
       }
 
-      // Charger les baux pour ce locataire
-      // Inclure les baux actifs, en attente de signature ET clôturés
-      let { data: leasesData, error: leasesError } = await supabase
+      // 2. Aussi essayer de charger les baux avec l'ID utilisateur directement (pour compatibilité)
+      // Cela permet de récupérer les anciens baux qui pourraient référencer directement l'ID utilisateur
+      console.log('🔍 Recherche de baux avec user.id:', user.id);
+      const { data: leasesByUserId, error: leasesByUserIdError } = await supabase
         .from('leases')
         .select('*')
-        .eq('tenant_id', tenantData.id)
+        .eq('tenant_id', user.id)
         .in('status', ['active', 'pending_signature', 'terminated'])
         .order('created_at', { ascending: false });
 
-      if (leasesError) {
+      if (leasesByUserIdError) {
+        console.warn('Avertissement lors du chargement des baux avec user.id:', leasesByUserIdError);
+      } else if (leasesByUserId && leasesByUserId.length > 0) {
+        console.log(`✅ ${leasesByUserId.length} baux trouvés avec user.id`);
+        // Combiner les résultats en évitant les doublons
+        const existingIds = new Set(leasesData.map(l => l.id));
+        leasesByUserId.forEach((lease: any) => {
+          if (!existingIds.has(lease.id)) {
+            leasesData.push(lease);
+          }
+        });
+      }
+
+      // Si aucune erreur critique et qu'on a des données, continuer
+      if (leasesError && leasesData.length === 0) {
         console.error('Erreur lors du chargement des baux:', leasesError);
         throw leasesError;
       }
 
-      if (!leasesData || leasesData.length === 0) {
+      if (leasesData.length === 0) {
+        console.log('ℹ️ Aucun bail trouvé pour cet utilisateur');
         setRentals([]);
         setLoading(false);
         return;
       }
 
+      console.log(`✅ ${leasesData.length} baux chargés au total`);
+
       // Charger les propriétés séparément pour garantir la récupération
+      // Essayer à la fois properties et properties_02
       const propertyIds = [...new Set(leasesData.map((lease: any) => lease.property_id).filter(Boolean))];
       let propertiesMap = new Map();
       
-     
       if (propertyIds.length > 0) {
-        console.log('📥 Tentative de chargement depuis Supabase...');
+        console.log('📥 Tentative de chargement des propriétés depuis Supabase...');
+        console.log(`   • ${propertyIds.length} propriétés à charger`);
         
-        // Essayer d'abord avec une requête groupée
-        const { data: propertiesData, error: propertiesError } = await supabase
-          .from('properties')
-          .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
-          .in('id', propertyIds);
-        
-      
-        
-        if (propertiesError) {
+        // Fonction helper pour charger depuis une table spécifique
+        const loadPropertiesFromTable = async (tableName: string) => {
+          const { data, error } = await supabase
+            .from(tableName)
+            .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
+            .in('id', propertyIds);
           
+          if (error) {
+            console.warn(`   ⚠️ Erreur lors du chargement depuis ${tableName}:`, error.message);
+            return null;
+          }
           
-          // Si la requête groupée échoue (probablement RLS), essayer une par une
-          console.log('🔄 Tentative de chargement une par une...');
+          return data || [];
+        };
+        
+        // Essayer d'abord properties_02 (table la plus récente)
+        let propertiesData = await loadPropertiesFromTable('properties_02');
+        
+        // Si aucune donnée trouvée dans properties_02, essayer properties
+        if (!propertiesData || propertiesData.length === 0) {
+          console.log('🔄 Aucune propriété trouvée dans properties_02, essai avec properties...');
+          propertiesData = await loadPropertiesFromTable('properties');
+        }
+        
+        // Si toujours rien, essayer une par une dans les deux tables
+        if (!propertiesData || propertiesData.length === 0) {
+          console.log('🔄 Tentative de chargement une par une dans les deux tables...');
           for (const propertyId of propertyIds) {
-            const { data: propertyData, error: singleError } = await supabase
-              .from('properties')
+            // Essayer d'abord properties_02
+            let propertyData = null;
+            let singleError = null;
+            
+            const { data: data02, error: error02 } = await supabase
+              .from('properties_02')
               .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
               .eq('id', propertyId)
               .maybeSingle();
             
-            if (!singleError && propertyData) {
+            if (!error02 && data02) {
+              propertyData = data02;
+            } else {
+              // Essayer properties
+              const { data: dataOld, error: errorOld } = await supabase
+                .from('properties')
+                .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
+                .eq('id', propertyId)
+                .maybeSingle();
+              
+              if (!errorOld && dataOld) {
+                propertyData = dataOld;
+              } else {
+                singleError = error02 || errorOld;
+              }
+            }
+            
+            if (propertyData) {
               console.log(`   ✅ Propriété ${propertyId} chargée: ${propertyData.title || 'Sans titre'}`);
               propertiesMap.set(propertyData.id, propertyData);
             } else {
-              console.warn(`   ⚠️ Propriété ${propertyId} non chargée:`, singleError?.message || 'Aucune donnée');
+              console.warn(`   ⚠️ Propriété ${propertyId} non trouvée dans properties_02 ni properties:`, singleError?.message || 'Aucune donnée');
             }
           }
-        } else if (propertiesData && propertiesData.length > 0) {
-          console.log('✅ Propriétés chargées avec succès:', propertiesData.length);
+        } else {
+          // Propriétés chargées avec succès
+          console.log(`✅ ${propertiesData.length} propriétés chargées avec succès`);
           propertiesData.forEach((prop: any) => {
             console.log(`   • ${prop.id}: ${prop.title || 'Sans titre'}`);
             propertiesMap.set(prop.id, prop);
           });
-        } else {
-        
-          
-          // Essayer une par une comme fallback
-          console.log('🔄 Tentative de chargement une par une (fallback)...');
-          for (const propertyId of propertyIds) {
-            const { data: propertyData, error: singleError } = await supabase
-              .from('properties')
-              .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
-              .eq('id', propertyId)
-              .maybeSingle();
-            
-            if (!singleError && propertyData) {
-              console.log(`   ✅ Propriété ${propertyId} chargée: ${propertyData.title || 'Sans titre'}`);
-              propertiesMap.set(propertyData.id, propertyData);
-            } else {
-              console.warn(`   ⚠️ Propriété ${propertyId} non chargée:`, singleError?.message || 'Aucune donnée');
-            }
-          }
         }
       } else {
         console.warn('⚠️ Aucun property_id trouvé dans les baux');

@@ -241,6 +241,33 @@ export default function TenantsTab() {
   const handleDeleteTenant = async () => {
     if (!selectedTenant || !userId) return;
 
+    // Vérifier si le locataire a au moins un bail actif
+    try {
+      const { data: activeLeases, error: leasesError } = await supabase
+        .from('leases')
+        .select('id, property_id')
+        .eq('tenant_id', selectedTenant.id)
+        .eq('owner_id', userId)
+        .eq('status', 'active');
+
+      if (leasesError) {
+        console.error('Erreur lors de la vérification des baux:', leasesError);
+        alert('Erreur lors de la vérification des baux actifs');
+        return;
+      }
+
+      if (activeLeases && activeLeases.length > 0) {
+        alert(`Impossible de supprimer ce locataire. Il a ${activeLeases.length} bail${activeLeases.length > 1 ? 'x' : ''} actif${activeLeases.length > 1 ? 's' : ''}. Veuillez d'abord clôturer ${activeLeases.length > 1 ? 'ces baux' : 'ce bail'} avant de supprimer le locataire.`);
+        setShowDeleteModal(false);
+        setSelectedTenant(null);
+        return;
+      }
+    } catch (error) {
+      console.error('Erreur lors de la vérification des baux:', error);
+      alert('Erreur lors de la vérification des baux actifs');
+      return;
+    }
+
     setActionLoading(true);
     try {
       const { error } = await supabase
@@ -254,6 +281,7 @@ export default function TenantsTab() {
       setShowDeleteModal(false);
       setSelectedTenant(null);
       await loadTenants();
+      alert('Locataire supprimé avec succès');
     } catch (error) {
       console.error('Erreur lors de la suppression du locataire:', error);
       alert('Une erreur est survenue lors de la suppression du locataire');
@@ -524,8 +552,11 @@ export default function TenantsTab() {
                           </button>
                           <button
                             onClick={() => handleDeleteClick(tenant)}
-                            className="flex items-center justify-center w-8 h-8 md:w-9 md:h-9 hover:bg-gray-100 rounded-md md:rounded-lg transition-colors cursor-pointer"
-                            title="Supprimer"
+                            disabled={tenant.status === 'active'}
+                            className={`flex items-center justify-center w-8 h-8 md:w-9 md:h-9 hover:bg-gray-100 rounded-md md:rounded-lg transition-colors ${
+                              tenant.status === 'active' ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+                            }`}
+                            title={tenant.status === 'active' ? 'Impossible de supprimer un locataire avec un bail actif' : 'Supprimer'}
                           >
                             <i className="ri-delete-bin-line text-base md:text-lg text-red-600"></i>
                           </button>

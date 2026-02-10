@@ -108,7 +108,7 @@ export default function RentalManagementPage() {
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3 md:gap-4 justify-center">
                   <button
-                    onClick={() => navigate('/profil')}
+                    onClick={() => navigate('/abonnements')}
                     className="flex items-center justify-center gap-2 px-6 md:px-8 py-3 md:py-4 bg-teal-600 text-white rounded-lg md:rounded-xl text-sm md:text-base font-semibold hover:bg-teal-700 transition-colors cursor-pointer whitespace-nowrap"
                   >
                     <i className="ri-vip-crown-line text-lg md:text-xl"></i>
