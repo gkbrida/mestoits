@@ -127,7 +127,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     try {
       const { data, error } = await supabase
         .from('properties_02')
-        .select('id, title, address, city, price, security_deposit')
+        .select('id, title, address, city, price, security_deposit, advance_rent')
         .eq('owner_id', userId)
         .eq('operation_type', 'rental') // Uniquement les biens en location longue durée
         .or('status.eq.active,status.eq.available')

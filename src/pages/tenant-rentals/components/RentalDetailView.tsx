@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useEmail } from '../../../hooks/useEmail';
+import { generateLeasePDF } from '../../../utils/leasePdfGenerator';
 
 interface RentalDetailViewProps {
   rental: any;
@@ -464,6 +465,112 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
     }
   };
 
+  // Fonction pour télécharger le PDF du bail
+  const handleDownloadLeasePDF = async () => {
+    try {
+      setProcessingPayment(true);
+      
+      // Charger toutes les données nécessaires pour le PDF
+      const leaseDataResult = await supabase
+        .from('leases')
+        .select('*, tenant_id')
+        .eq('id', rental.id)
+        .single();
+
+      if (leaseDataResult.error) throw leaseDataResult.error;
+      const leaseData = leaseDataResult.data;
+
+      // Charger les données en parallèle
+      const [propertyDataResult, tenantDataResult, ownerDataResult, currentUserResult] = await Promise.all([
+        supabase
+          .from('properties_02')
+          .select('title, address, city, surface_area, rooms, bedrooms, bathrooms')
+          .eq('id', rental.property_02_id)
+          .single(),
+        supabase
+          .from('tenants')
+          .select('first_name, last_name, email, phone')
+          .eq('id', leaseData.tenant_id)
+          .single(),
+        supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name, email, phone')
+          .eq('id', rental.owner_id)
+          .single(),
+        supabase.auth.getUser(),
+      ]);
+
+      if (propertyDataResult.error) throw propertyDataResult.error;
+      if (tenantDataResult.error) throw tenantDataResult.error;
+      if (ownerDataResult.error) throw ownerDataResult.error;
+
+      const propertyData = propertyDataResult.data;
+      const tenantData = tenantDataResult.data;
+      const ownerData = ownerDataResult.data;
+      const currentUser = currentUserResult.data.user;
+
+      // Récupérer les informations du locataire depuis users_2025_12_01_11_29 si disponible
+      let tenantName = tenantData ? `${tenantData.first_name || ''} ${tenantData.last_name || ''}`.trim() : 'Locataire';
+      let tenantEmail = tenantData?.email || '';
+      let tenantPhone = tenantData?.phone || '';
+
+      if (tenantData?.email && currentUser) {
+        const userDataResult = await supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name, email, phone')
+          .eq('email', tenantData.email)
+          .single();
+
+        if (!userDataResult.error && userDataResult.data) {
+          tenantName = userDataResult.data.full_name || tenantName;
+          tenantEmail = userDataResult.data.email || tenantEmail;
+          tenantPhone = userDataResult.data.phone || tenantPhone;
+        }
+      }
+
+      // Préparer les données pour le PDF
+      const pdfData = {
+        id: leaseData.id,
+        property_title: propertyData?.title || rental.property_title || 'Bien inconnu',
+        property_address: propertyData?.address || '',
+        property_city: propertyData?.city || '',
+        property_surface_area: propertyData?.surface_area || null,
+        property_rooms: propertyData?.rooms || null,
+        property_bedrooms: propertyData?.bedrooms || null,
+        property_bathrooms: propertyData?.bathrooms || null,
+        tenant_name: tenantName,
+        tenant_email: tenantEmail,
+        tenant_phone: tenantPhone,
+        owner_name: ownerData?.full_name || rental.owner_name || 'Propriétaire',
+        owner_email: ownerData?.email || '',
+        owner_phone: ownerData?.phone || '',
+        start_date: leaseData.start_date,
+        end_date: leaseData.end_date,
+        monthly_rent: leaseData.monthly_rent,
+        security_deposit: leaseData.security_deposit,
+        advance_rent_amount: leaseData.advance_rent_amount,
+        payment_due_day: leaseData.payment_due_day,
+        article5: leaseData.article5,
+        article6: leaseData.article6,
+        article7: leaseData.article7,
+        article8: leaseData.article8,
+        article9: leaseData.article9,
+        article10: leaseData.article10,
+        additional_notes: leaseData.additional_notes,
+        signed_at: leaseData.signed_at,
+        created_at: leaseData.created_at,
+      };
+
+      // Générer le PDF
+      generateLeasePDF(pdfData);
+    } catch (error: any) {
+      console.error('Erreur lors de la génération du PDF:', error);
+      alert(`Erreur lors de la génération du PDF: ${error.message}`);
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
+
   return (
     <div className="space-y-4 md:space-y-6">
       {/* Back Button */}
@@ -501,11 +608,19 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
           </div>
         </div>
 
-        {/* Message Button */}
-        <div className="mt-4 sm:mt-6 pt-4 sm:pt-6 border-t border-gray-200">
+        {/* Action Buttons */}
+        <div className="mt-4 sm:mt-6 pt-4 sm:pt-6 border-t border-gray-200 flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={handleDownloadLeasePDF}
+            disabled={processingPayment}
+            className="flex items-center justify-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-green-600 text-white rounded-lg text-sm sm:text-base font-semibold hover:bg-green-700 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <i className="ri-file-download-line text-base sm:text-lg w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center"></i>
+            Télécharger le PDF du bail
+          </button>
           <button
             onClick={() => setShowMessageModal(true)}
-            className="flex items-center justify-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-blue-600 text-white rounded-lg text-sm sm:text-base font-semibold hover:bg-blue-700 transition-colors cursor-pointer w-full sm:w-auto"
+            className="flex items-center justify-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 bg-blue-600 text-white rounded-lg text-sm sm:text-base font-semibold hover:bg-blue-700 transition-colors cursor-pointer"
           >
             <i className="ri-mail-send-line text-base sm:text-lg w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center"></i>
             Envoyer un message au propriétaire

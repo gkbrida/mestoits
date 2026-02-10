@@ -326,6 +326,8 @@ function buildEmailPayload(
       return buildDocumentProfessionnelRejeteEmail(data);
     case 'professionnel_certifie':
       return buildProfessionnelCertifieEmail(data);
+    case 'modification_bail':
+      return buildModificationBailEmail(data);
     default:
       console.warn(`Type d'email non implémenté: ${type}`);
       return null;
@@ -2182,6 +2184,184 @@ function buildProfessionnelCertifieEmail(data: Record<string, unknown>): {
   return {
     to: professionalEmail,
     subject: 'Félicitations ! Votre compte professionnel est certifié',
+    html,
+    text,
+  };
+}
+
+/**
+ * Construit l'email de modification d'un bail
+ */
+function buildModificationBailEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const tenantEmail = data.tenantEmail as string;
+  const tenantName = data.tenantName as string;
+  const ownerName = data.ownerName as string;
+  const propertyTitle = data.propertyTitle as string | undefined;
+  const propertyAddress = data.propertyAddress as string | undefined;
+  const propertyCity = data.propertyCity as string | undefined;
+  const modifications = data.modifications as Array<{ field: string; oldValue: string; newValue: string }>;
+  const appUrl = (data.appUrl as string) || 'http://localhost:3000';
+
+  if (!tenantEmail || !tenantName || !ownerName || !modifications || modifications.length === 0) {
+    console.error('Données manquantes pour l\'email de modification de bail');
+    return null;
+  }
+
+  const formatPrice = (price: number | string) => {
+    const numPrice = typeof price === 'string' ? parseFloat(price) : price;
+    return new Intl.NumberFormat('fr-FR').format(numPrice) + ' FCFA';
+  };
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('fr-FR', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+  };
+
+  const getFieldLabel = (field: string): string => {
+    const labels: Record<string, string> = {
+      monthly_rent: 'Loyer mensuel',
+      end_date: 'Date de fin',
+      payment_due_day: 'Jour d\'échéance de paiement',
+      article5: 'Article 5',
+      article6: 'Article 6',
+      article7: 'Article 7',
+      article8: 'Article 8',
+      article9: 'Article 9',
+      article10: 'Article 10',
+      additional_notes: 'Notes additionnelles',
+    };
+    return labels[field] || field;
+  };
+
+  const formatValue = (field: string, value: string): string => {
+    if (field === 'monthly_rent') {
+      return formatPrice(value);
+    }
+    if (field === 'end_date') {
+      return formatDate(value);
+    }
+    if (field === 'payment_due_day') {
+      return `Le ${value} de chaque mois`;
+    }
+    return value;
+  };
+
+  const modificationsList = modifications.map(mod => `
+    <tr style="border-bottom: 1px solid #e5e7eb;">
+      <td style="padding: 12px; font-weight: 600; color: #374151;">${getFieldLabel(mod.field)}</td>
+      <td style="padding: 12px; color: #6b7280; text-decoration: line-through;">${formatValue(mod.field, mod.oldValue)}</td>
+      <td style="padding: 12px; color: #14b8a6; font-weight: 600;">${formatValue(mod.field, mod.newValue)}</td>
+    </tr>
+  `).join('');
+
+  const propertyInfo = propertyTitle || propertyAddress || propertyCity
+    ? `<div class="info-box">
+        <h3 style="margin-top: 0; color: #14b8a6;">Bien concerné</h3>
+        ${propertyTitle ? `<p><strong>Titre :</strong> ${propertyTitle}</p>` : ''}
+        ${propertyAddress || propertyCity
+          ? `<p><strong>Adresse :</strong> ${[propertyAddress, propertyCity].filter(Boolean).join(', ')}</p>`
+          : ''}
+      </div>`
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; }
+    .container { max-width: 600px; margin: 0 auto; background: #ffffff; }
+    .header { background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 30px; border-radius: 0 0 10px 10px; }
+    .info-box { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #14b8a6; }
+    .modifications-table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; margin: 20px 0; }
+    .modifications-table th { background: #f3f4f6; padding: 12px; text-align: left; font-weight: 600; color: #374151; }
+    .modifications-table td { padding: 12px; }
+    .btn { display: inline-block; padding: 12px 24px; background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%); color: white; text-decoration: none; border-radius: 8px; margin-top: 20px; font-weight: 600; }
+    .footer { text-align: center; padding: 20px; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0; font-size: 24px;">Modification du contrat de bail</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour <strong>${tenantName}</strong>,</p>
+      
+      <p>Nous vous informons que <strong>${ownerName}</strong> a apporté des modifications à votre contrat de bail.</p>
+      
+      ${propertyInfo}
+      
+      <div style="margin: 30px 0;">
+        <h2 style="color: #14b8a6; margin-bottom: 15px;">Modifications apportées</h2>
+        <table class="modifications-table">
+          <thead>
+            <tr>
+              <th>Élément</th>
+              <th>Ancienne valeur</th>
+              <th>Nouvelle valeur</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${modificationsList}
+          </tbody>
+        </table>
+      </div>
+      
+      <p style="margin-top: 30px;">Veuillez consulter votre contrat de bail mis à jour dans votre espace locataire pour prendre connaissance de toutes les modifications.</p>
+      
+      <div style="text-align: center;">
+        <a href="${appUrl}/mes-locations" class="btn">Consulter mon bail</a>
+      </div>
+      
+      <p style="margin-top: 30px; color: #6b7280; font-size: 14px;">
+        Si vous avez des questions concernant ces modifications, n'hésitez pas à contacter votre propriétaire.
+      </p>
+    </div>
+    <div class="footer">
+      <p>Cet email a été envoyé automatiquement par Mestoits.</p>
+      <p>Merci de ne pas répondre à cet email.</p>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${tenantName},
+
+Nous vous informons que ${ownerName} a apporté des modifications à votre contrat de bail.
+
+${propertyTitle ? `Bien concerné: ${propertyTitle}` : ''}
+${propertyAddress || propertyCity ? `Adresse: ${[propertyAddress, propertyCity].filter(Boolean).join(', ')}` : ''}
+
+MODIFICATIONS APPORTÉES:
+${modifications.map(mod => `
+- ${getFieldLabel(mod.field)}:
+  Ancienne valeur: ${formatValue(mod.field, mod.oldValue)}
+  Nouvelle valeur: ${formatValue(mod.field, mod.newValue)}
+`).join('\n')}
+
+Veuillez consulter votre contrat de bail mis à jour dans votre espace locataire pour prendre connaissance de toutes les modifications.
+
+Accéder à mon bail: ${appUrl}/mes-locations
+
+Si vous avez des questions concernant ces modifications, n'hésitez pas à contacter votre propriétaire.
+
+Cordialement,
+L'équipe Mestoits`;
+
+  return {
+    to: tenantEmail,
+    subject: `Modification du contrat de bail - ${propertyTitle || 'Votre bien'}`,
     html,
     text,
   };

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useEmail } from '../../../hooks/useEmail';
+import { generateLeasePDF } from '../../../utils/leasePdfGenerator';
 
 interface LeaseDetailViewProps {
   lease: any;
@@ -54,6 +55,7 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
   const [showReceiptConfirmationModal, setShowReceiptConfirmationModal] = useState(false);
   const [existingReceiptInfo, setExistingReceiptInfo] = useState<{status: string, dueDate: string} | null>(null);
   const [confirmationStep, setConfirmationStep] = useState(1); // 1 = première confirmation, 2 = deuxième confirmation
+  const [showEditLeaseModal, setShowEditLeaseModal] = useState(false);
   
   // Forms
   const [inventoryForm, setInventoryForm] = useState({
@@ -898,6 +900,224 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
     setCurrentPhotoIndex((prev) => (prev < currentPhotoList.length - 1 ? prev + 1 : 0));
   };
 
+  // Form for editing lease - includes all fields for display
+  const [editLeaseForm, setEditLeaseForm] = useState({
+    property_title: '',
+    tenant_name: '',
+    start_date: '',
+    end_date: '',
+    monthly_rent: '',
+    security_deposit: '',
+    advance_rent_amount: '',
+    payment_due_day: '',
+    article5: '',
+    article6: '',
+    article7: '',
+    article8: '',
+    article9: '',
+    article10: '',
+    additional_notes: '',
+  });
+
+  // Fonction pour ouvrir le modal de modification
+  const openEditLeaseModal = async () => {
+    try {
+      // Charger les données complètes du bail depuis la base de données
+      const { data: leaseData, error } = await supabase
+        .from('leases')
+        .select('property_02_id, tenant_id, start_date, end_date, monthly_rent, security_deposit, advance_rent_amount, payment_due_day, article5, article6, article7, article8, article9, article10, additional_notes')
+        .eq('id', lease.id)
+        .single();
+
+      if (error) {
+        console.error('Erreur lors du chargement du bail:', error);
+        alert('Erreur lors du chargement des données du bail.');
+        return;
+      }
+
+      // Charger les informations du bien et du locataire
+      const [propertyData, tenantData] = await Promise.all([
+        leaseData.property_02_id
+          ? supabase
+              .from('properties_02')
+              .select('title')
+              .eq('id', leaseData.property_02_id)
+              .single()
+          : Promise.resolve({ data: null, error: null }),
+        supabase
+          .from('tenants')
+          .select('first_name, last_name')
+          .eq('id', leaseData.tenant_id)
+          .single(),
+      ]);
+
+      const propertyTitle = propertyData.data?.title || lease.property_title || 'Bien inconnu';
+      const tenantName = tenantData.data
+        ? `${tenantData.data.first_name || ''} ${tenantData.data.last_name || ''}`.trim()
+        : lease.tenant_name || 'Locataire inconnu';
+
+      // Préremplir tous les champs avec les valeurs actuelles
+      setEditLeaseForm({
+        property_title: propertyTitle,
+        tenant_name: tenantName,
+        start_date: leaseData.start_date || '',
+        end_date: leaseData.end_date || '',
+        monthly_rent: leaseData.monthly_rent?.toString() || '',
+        security_deposit: leaseData.security_deposit?.toString() || '',
+        advance_rent_amount: leaseData.advance_rent_amount?.toString() || '',
+        payment_due_day: leaseData.payment_due_day?.toString() || '',
+        article5: leaseData.article5 || '',
+        article6: leaseData.article6 || '',
+        article7: leaseData.article7 || '',
+        article8: leaseData.article8 || '',
+        article9: leaseData.article9 || '',
+        article10: leaseData.article10 || '',
+        additional_notes: leaseData.additional_notes || '',
+      });
+      setShowEditLeaseModal(true);
+    } catch (error: any) {
+      console.error('Erreur lors de l\'ouverture du modal de modification:', error);
+      alert(`Erreur: ${error.message}`);
+    }
+  };
+
+  // Fonction pour sauvegarder les modifications
+  const handleSaveLeaseModifications = async () => {
+    if (!lease?.id) return;
+
+    setActionLoading(true);
+    try {
+      // Récupérer les valeurs actuelles du bail
+      const { data: currentLease, error: fetchError } = await supabase
+        .from('leases')
+        .select('monthly_rent, end_date, payment_due_day, article5, article6, article7, article8, article9, article10, additional_notes')
+        .eq('id', lease.id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      // Préparer les modifications
+      const updates: any = {};
+      const modifications: Array<{ field: string; oldValue: string; newValue: string }> = [];
+
+      // Vérifier chaque champ modifié
+      if (editLeaseForm.monthly_rent && parseFloat(editLeaseForm.monthly_rent) !== currentLease.monthly_rent) {
+        updates.monthly_rent = parseFloat(editLeaseForm.monthly_rent);
+        modifications.push({
+          field: 'monthly_rent',
+          oldValue: currentLease.monthly_rent.toString(),
+          newValue: editLeaseForm.monthly_rent,
+        });
+      }
+
+      if (editLeaseForm.end_date && editLeaseForm.end_date !== currentLease.end_date) {
+        updates.end_date = editLeaseForm.end_date;
+        modifications.push({
+          field: 'end_date',
+          oldValue: currentLease.end_date,
+          newValue: editLeaseForm.end_date,
+        });
+      }
+
+      if (editLeaseForm.payment_due_day && parseInt(editLeaseForm.payment_due_day) !== currentLease.payment_due_day) {
+        updates.payment_due_day = parseInt(editLeaseForm.payment_due_day);
+        modifications.push({
+          field: 'payment_due_day',
+          oldValue: currentLease.payment_due_day?.toString() || '',
+          newValue: editLeaseForm.payment_due_day,
+        });
+      }
+
+      const articleFields = ['article5', 'article6', 'article7', 'article8', 'article9', 'article10'];
+      articleFields.forEach(field => {
+        const newValue = editLeaseForm[field as keyof typeof editLeaseForm];
+        const oldValue = currentLease[field as keyof typeof currentLease] || '';
+        if (newValue !== oldValue) {
+          updates[field] = newValue || null;
+          modifications.push({
+            field,
+            oldValue: oldValue.toString(),
+            newValue: newValue || '',
+          });
+        }
+      });
+
+      // Vérifier les notes additionnelles
+      const newNotes = editLeaseForm.additional_notes || '';
+      const oldNotes = currentLease.additional_notes || '';
+      if (newNotes !== oldNotes) {
+        updates.additional_notes = newNotes || null;
+        modifications.push({
+          field: 'additional_notes',
+          oldValue: oldNotes,
+          newValue: newNotes,
+        });
+      }
+
+      // Si aucune modification, ne rien faire
+      if (modifications.length === 0) {
+        alert('Aucune modification détectée.');
+        setActionLoading(false);
+        return;
+      }
+
+      // Mettre à jour le bail
+      const { error: updateError } = await supabase
+        .from('leases')
+        .update(updates)
+        .eq('id', lease.id);
+
+      if (updateError) throw updateError;
+
+      // Récupérer les informations du locataire et du bien pour l'email
+      const [tenantData, propertyData, ownerData] = await Promise.all([
+        supabase
+          .from('tenants')
+          .select('first_name, last_name, email')
+          .eq('id', lease.tenant_id)
+          .single(),
+        supabase
+          .from('properties_02')
+          .select('title, address, city')
+          .eq('id', lease.property_02_id)
+          .single(),
+        supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name')
+          .eq('id', userId)
+          .single(),
+      ]);
+
+      if (tenantData.error) throw tenantData.error;
+      if (propertyData.error) throw propertyData.error;
+      if (ownerData.error) throw ownerData.error;
+
+      // Envoyer l'email de notification au locataire
+      if (tenantData.data?.email) {
+        await sendEmail('modification_bail', {
+          tenantEmail: tenantData.data.email,
+          tenantName: `${tenantData.data.first_name} ${tenantData.data.last_name}`,
+          ownerName: ownerData.data?.full_name || 'Propriétaire',
+          propertyTitle: propertyData.data?.title,
+          propertyAddress: propertyData.data?.address,
+          propertyCity: propertyData.data?.city,
+          modifications: modifications,
+        });
+      }
+
+      setShowEditLeaseModal(false);
+      alert('Modifications enregistrées avec succès. Le locataire a été notifié par email.');
+      
+      // Recharger les données du bail
+      window.location.reload(); // Simple reload pour mettre à jour l'affichage
+    } catch (error: any) {
+      console.error('Erreur lors de la modification du bail:', error);
+      alert(`Erreur lors de la modification: ${error.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   // Gestion des touches clavier pour la navigation
   useEffect(() => {
     if (!showPhotoGallery) return;
@@ -918,6 +1138,88 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showPhotoGallery, currentPhotoList.length, currentPhotoIndex]);
+
+  // Fonction pour télécharger le PDF du bail
+  const handleDownloadLeasePDF = async () => {
+    try {
+      setActionLoading(true);
+      
+      // Charger toutes les données nécessaires pour le PDF
+      const [leaseDataResult, propertyDataResult, tenantDataResult, ownerDataResult] = await Promise.all([
+        supabase
+          .from('leases')
+          .select('*')
+          .eq('id', lease.id)
+          .single(),
+        supabase
+          .from('properties_02')
+          .select('title, address, city, surface_area, rooms, bedrooms, bathrooms')
+          .eq('id', lease.property_02_id || lease.property_id)
+          .single(),
+        supabase
+          .from('tenants')
+          .select('first_name, last_name, email, phone')
+          .eq('id', lease.tenant_id)
+          .single(),
+        supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name, email, phone')
+          .eq('id', userId)
+          .single(),
+      ]);
+
+      if (leaseDataResult.error) throw leaseDataResult.error;
+      if (propertyDataResult.error) throw propertyDataResult.error;
+      if (tenantDataResult.error) throw tenantDataResult.error;
+      if (ownerDataResult.error) throw ownerDataResult.error;
+
+      const leaseData = leaseDataResult.data;
+      const propertyData = propertyDataResult.data;
+      const tenantData = tenantDataResult.data;
+      const ownerData = ownerDataResult.data;
+
+      // Préparer les données pour le PDF
+      const pdfData = {
+        id: leaseData.id,
+        property_title: propertyData?.title || lease.property_title || 'Bien inconnu',
+        property_address: propertyData?.address || '',
+        property_city: propertyData?.city || '',
+        property_surface_area: propertyData?.surface_area || null,
+        property_rooms: propertyData?.rooms || null,
+        property_bedrooms: propertyData?.bedrooms || null,
+        property_bathrooms: propertyData?.bathrooms || null,
+        tenant_name: tenantData ? `${tenantData.first_name || ''} ${tenantData.last_name || ''}`.trim() : lease.tenant_name,
+        tenant_email: tenantData?.email || '',
+        tenant_phone: tenantData?.phone || '',
+        owner_name: ownerData?.full_name || 'Propriétaire',
+        owner_email: ownerData?.email || '',
+        owner_phone: ownerData?.phone || '',
+        start_date: leaseData.start_date,
+        end_date: leaseData.end_date,
+        monthly_rent: leaseData.monthly_rent,
+        security_deposit: leaseData.security_deposit,
+        advance_rent_amount: leaseData.advance_rent_amount,
+        payment_due_day: leaseData.payment_due_day,
+        article5: leaseData.article5,
+        article6: leaseData.article6,
+        article7: leaseData.article7,
+        article8: leaseData.article8,
+        article9: leaseData.article9,
+        article10: leaseData.article10,
+        additional_notes: leaseData.additional_notes,
+        signed_at: leaseData.signed_at,
+        created_at: leaseData.created_at,
+      };
+
+      // Générer le PDF
+      generateLeasePDF(pdfData);
+    } catch (error: any) {
+      console.error('Erreur lors de la génération du PDF:', error);
+      alert(`Erreur lors de la génération du PDF: ${error.message}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
 
   // Filtrer les paiements pour l'affichage (basé sur les données de la DB)
   const unpaidPayments = rentPayments.filter(p => !p.paid);
@@ -950,9 +1252,30 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
               <span className="break-words">Du {formatDate(lease.start_date)} au {formatDate(lease.end_date)}</span>
             </div>
           </div>
-          <div className="text-left sm:text-right sm:ml-6 flex-shrink-0">
-            <p className="text-xs sm:text-sm text-gray-600 mb-1">Loyer mensuel</p>
-            <p className="text-2xl sm:text-3xl font-bold text-teal-600">{formatPrice(lease.monthly_rent)}</p>
+          <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3 sm:gap-4 flex-shrink-0">
+            <div className="text-left sm:text-right">
+              <p className="text-xs sm:text-sm text-gray-600 mb-1">Loyer mensuel</p>
+              <p className="text-2xl sm:text-3xl font-bold text-teal-600">{formatPrice(lease.monthly_rent)}</p>
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
+              <button
+                onClick={handleDownloadLeasePDF}
+                disabled={actionLoading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors cursor-pointer text-sm font-medium flex items-center gap-2 whitespace-nowrap disabled:opacity-50"
+              >
+                <i className="ri-file-download-line"></i>
+                <span>Télécharger le PDF</span>
+              </button>
+              {lease.status !== 'terminated' && (
+                <button
+                  onClick={openEditLeaseModal}
+                  className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors cursor-pointer text-sm font-medium flex items-center gap-2 whitespace-nowrap"
+                >
+                  <i className="ri-edit-line"></i>
+                  <span>Modifier le bail</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -1906,6 +2229,294 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de modification du bail */}
+      {showEditLeaseModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-3 md:p-6 overflow-y-auto">
+          <div className="bg-white rounded-xl md:rounded-2xl shadow-xl max-w-[900px] w-full p-4 md:p-6 lg:p-8 my-4 md:my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4 md:mb-6">
+              <h3 className="text-xl md:text-2xl font-bold text-gray-900">
+                Modifier le bail
+              </h3>
+              <button
+                onClick={() => setShowEditLeaseModal(false)}
+                className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
+              >
+                <i className="ri-close-line text-xl md:text-2xl w-5 h-5 md:w-6 md:h-6 flex items-center justify-center"></i>
+              </button>
+            </div>
+
+            <div className="space-y-4 md:space-y-6">
+              {/* Property Selection - Lecture seule */}
+              <div>
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Bien à louer
+                </label>
+                <input
+                  type="text"
+                  value={editLeaseForm.property_title}
+                  readOnly
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl bg-gray-100 text-gray-600 cursor-not-allowed text-sm"
+                />
+              </div>
+
+              {/* Tenant Selection - Lecture seule */}
+              <div>
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Locataire
+                </label>
+                <input
+                  type="text"
+                  value={editLeaseForm.tenant_name}
+                  readOnly
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl bg-gray-100 text-gray-600 cursor-not-allowed text-sm"
+                />
+              </div>
+
+              {/* Dates */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Date de début
+                  </label>
+                  <input
+                    type="date"
+                    value={editLeaseForm.start_date}
+                    readOnly
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl bg-gray-100 text-gray-600 cursor-not-allowed text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Date de fin <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={editLeaseForm.start_date || undefined}
+                    value={editLeaseForm.end_date}
+                    onChange={(e) => {
+                      const newEndDate = e.target.value;
+                      if (editLeaseForm.start_date && newEndDate) {
+                        const startDate = new Date(editLeaseForm.start_date);
+                        const endDate = new Date(newEndDate);
+                        if (endDate < startDate) {
+                          alert('La date de fin ne peut pas être antérieure à la date de début.');
+                          return;
+                        }
+                      }
+                      setEditLeaseForm({ ...editLeaseForm, end_date: newEndDate });
+                    }}
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Financial Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Loyer mensuel (FCFA) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    placeholder="250000"
+                    value={editLeaseForm.monthly_rent}
+                    onChange={(e) => setEditLeaseForm({ ...editLeaseForm, monthly_rent: e.target.value })}
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Dépôt de garantie (FCFA)
+                  </label>
+                  <input
+                    type="number"
+                    value={editLeaseForm.security_deposit}
+                    readOnly
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl bg-gray-100 text-gray-600 cursor-not-allowed text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Advance Rent and Payment Due Day */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 md:gap-4">
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Montant d'avance sur loyer (FCFA)
+                  </label>
+                  <input
+                    type="number"
+                    value={editLeaseForm.advance_rent_amount}
+                    readOnly
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl bg-gray-100 text-gray-600 cursor-not-allowed text-sm"
+                  />
+                  <p className="text-[10px] md:text-xs text-gray-500 mt-1">
+                    Montant payé par le locataire lors de la signature du bail
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                    Jour d'échéance de paiement
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    placeholder="5"
+                    value={editLeaseForm.payment_due_day}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '' || (parseInt(value) >= 1 && parseInt(value) <= 31)) {
+                        setEditLeaseForm({ ...editLeaseForm, payment_due_day: value });
+                      }
+                    }}
+                    className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
+                  />
+                  <p className="text-[10px] md:text-xs text-gray-500 mt-1">
+                    Jour du mois où le locataire doit payer (1-31)
+                  </p>
+                </div>
+              </div>
+
+              {/* Lease Terms Section */}
+              <div className="border-t border-gray-200 pt-4 md:pt-6">
+                <div className="flex items-center gap-2 mb-3 md:mb-4">
+                  <i className="ri-file-text-line text-xl md:text-2xl text-teal-600 w-5 h-5 md:w-6 md:h-6 flex items-center justify-center"></i>
+                  <h4 className="text-base md:text-lg font-bold text-gray-900">Articles du contrat de bail</h4>
+                </div>
+                <p className="text-xs md:text-sm text-gray-600 mb-4 md:mb-6">
+                  Vous pouvez modifier les articles du contrat selon vos besoins. Les modifications seront incluses dans le bail signé par le locataire.
+                </p>
+
+                <div className="space-y-3 md:space-y-4">
+                  {/* Article 5 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 1 - État des lieux
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article5}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article5: e.target.value })}
+                      rows={2}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+
+                  {/* Article 6 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 2 - Obligations du locataire
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article6}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article6: e.target.value })}
+                      rows={4}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+
+                  {/* Article 7 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 3 - Obligations du bailleur
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article7}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article7: e.target.value })}
+                      rows={3}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+
+                  {/* Article 8 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 4 - Paiement du loyer
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article8}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article8: e.target.value })}
+                      rows={2}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+
+                  {/* Article 9 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 5 - Travaux et modifications
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article9}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article9: e.target.value })}
+                      rows={3}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+
+                  {/* Article 10 */}
+                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
+                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                      Article 6 - Résiliation du bail
+                    </label>
+                    <textarea
+                      value={editLeaseForm.article10}
+                      onChange={(e) => setEditLeaseForm({ ...editLeaseForm, article10: e.target.value })}
+                      rows={3}
+                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Additional Notes */}
+              <div>
+                <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
+                  Notes additionnelles
+                </label>
+                <textarea
+                  rows={3}
+                  placeholder="Conditions particulières, équipements inclus, etc."
+                  value={editLeaseForm.additional_notes}
+                  onChange={(e) => setEditLeaseForm({ ...editLeaseForm, additional_notes: e.target.value })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-col sm:flex-row gap-3 md:gap-4 pt-3 md:pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setShowEditLeaseModal(false)}
+                  disabled={actionLoading}
+                  className="flex-1 px-5 md:px-6 py-2.5 md:py-3 bg-gray-100 text-gray-700 rounded-lg md:rounded-xl text-sm md:text-base font-semibold hover:bg-gray-200 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleSaveLeaseModifications}
+                  disabled={actionLoading || !editLeaseForm.monthly_rent || !editLeaseForm.end_date}
+                  className="flex-1 px-5 md:px-6 py-2.5 md:py-3 bg-teal-600 text-white rounded-lg md:rounded-xl text-sm md:text-base font-semibold hover:bg-teal-700 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {actionLoading ? (
+                    <>
+                      <i className="ri-loader-4-line animate-spin w-4 h-4 md:w-5 md:h-5 flex items-center justify-center"></i>
+                      Enregistrement...
+                    </>
+                  ) : (
+                    <>
+                      <i className="ri-save-line text-lg md:text-xl w-4 h-4 md:w-5 md:h-5 flex items-center justify-center"></i>
+                      Enregistrer les modifications
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
