@@ -170,7 +170,7 @@ export default function TenantRentalsPage() {
       console.log('   • Lease ID:', paymentData.lease_id);
       const { data: leaseData, error: leaseError } = await supabase
         .from('leases')
-        .select('id, monthly_rent, property_id, tenant_id')
+        .select('id, monthly_rent, property_02_id, tenant_id')
         .eq('id', paymentData.lease_id)
         .single();
 
@@ -182,16 +182,16 @@ export default function TenantRentalsPage() {
 
       console.log('✅ Bail trouvé:');
       console.log('   • ID:', leaseData.id);
-      console.log('   • Property ID:', leaseData.property_id);
+      console.log('   • Property 02 ID:', leaseData.property_02_id);
       console.log('   • Tenant ID:', leaseData.tenant_id);
 
-      // Récupérer les informations de la propriété
+      // Récupérer les informations de la propriété depuis properties_02
       let property = null;
-      if (leaseData.property_id) {
+      if (leaseData.property_02_id) {
         const { data: propertyData, error: propertyError } = await supabase
-          .from('properties')
+          .from('properties_02')
           .select('id, title, address, city, owner_id')
-          .eq('id', leaseData.property_id)
+          .eq('id', leaseData.property_02_id)
           .single();
         
         if (!propertyError && propertyData) {
@@ -270,7 +270,7 @@ export default function TenantRentalsPage() {
       console.log('   • Données mises à jour:', updatedData);
 
       // Récupérer les informations du propriétaire
-      if (leaseData.property_id && property && property.owner_id) {
+      if (leaseData.property_02_id && property && property.owner_id) {
         // Récupérer les informations de l'utilisateur propriétaire directement
         const { data: ownerUser, error: userError } = await supabase
           .from('users_2025_12_01_11_29')
@@ -359,15 +359,24 @@ export default function TenantRentalsPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        // Trouver le locataire correspondant à l'utilisateur par email
-        const { data: tenantData } = await supabase
+        // Trouver TOUS les locataires correspondant à l'utilisateur par email
+        // Un utilisateur peut avoir plusieurs numéros de locataire
+        const { data: tenantsList, error: tenantError } = await supabase
           .from('tenants')
           .select('id')
-          .eq('email', user.email)
-          .single();
+          .eq('email', user.email);
         
-        if (tenantData) {
-          setUserId(tenantData.id);
+        if (tenantError) {
+          console.warn('Erreur lors de la recherche des locataires:', tenantError);
+        }
+        
+        if (tenantsList && tenantsList.length > 0) {
+          // Utiliser le premier locataire trouvé pour userId (pour compatibilité)
+          // Mais loadRentals chargera les baux pour TOUS les locataires
+          setUserId(tenantsList[0].id);
+          if (tenantsList.length > 1) {
+            console.log(`ℹ️ ${tenantsList.length} locataires trouvés pour cet email, tous seront pris en compte`);
+          }
         } else {
           // Si pas de locataire trouvé, utiliser l'ID utilisateur directement
           // (pour compatibilité avec les anciens baux qui pourraient référencer users_2025_12_01_11_29)
@@ -394,36 +403,45 @@ export default function TenantRentalsPage() {
         return;
       }
 
-      // Trouver le locataire correspondant à l'utilisateur par email
-      const { data: tenantData, error: tenantError } = await supabase
+      // Trouver TOUS les locataires correspondant à l'utilisateur par email
+      // Un utilisateur peut avoir plusieurs numéros de locataire (plusieurs entrées dans tenants)
+      const { data: tenantsList, error: tenantError } = await supabase
         .from('tenants')
         .select('id')
-        .eq('email', user.email)
-        .maybeSingle();
+        .eq('email', user.email);
 
       if (tenantError) {
-        console.error('Erreur lors de la recherche du locataire:', tenantError);
+        console.error('Erreur lors de la recherche des locataires:', tenantError);
       }
 
-      // Charger les baux pour ce locataire (si trouvé) OU pour l'utilisateur directement (compatibilité)
+      // Charger les baux pour TOUS les locataires trouvés OU pour l'utilisateur directement (compatibilité)
       let leasesData: any[] = [];
       let leasesError: any = null;
 
-      // 1. Si un locataire est trouvé, charger les baux avec tenant_id
-      if (tenantData) {
-        console.log('✅ Locataire trouvé, chargement des baux avec tenant_id:', tenantData.id);
-        const { data, error } = await supabase
+      // 1. Si des locataires sont trouvés, charger les baux pour chacun d'eux
+      if (tenantsList && tenantsList.length > 0) {
+        console.log(`✅ ${tenantsList.length} locataire(s) trouvé(s) pour cet email`);
+        
+        // Récupérer tous les IDs de locataires
+        const tenantIds = tenantsList.map(t => t.id);
+        console.log('📋 IDs des locataires:', tenantIds);
+        
+        // Charger tous les baux pour ces locataires en une seule requête
+        const { data: leasesForTenants, error: leasesForTenantsError } = await supabase
           .from('leases')
           .select('*')
-          .eq('tenant_id', tenantData.id)
+          .in('tenant_id', tenantIds)
           .in('status', ['active', 'pending_signature', 'terminated'])
           .order('created_at', { ascending: false });
         
-        if (error) {
-          console.error('Erreur lors du chargement des baux avec tenant_id:', error);
-          leasesError = error;
-        } else if (data) {
-          leasesData = data;
+        if (leasesForTenantsError) {
+          console.error('Erreur lors du chargement des baux pour les locataires:', leasesForTenantsError);
+          leasesError = leasesForTenantsError;
+        } else if (leasesForTenants && leasesForTenants.length > 0) {
+          console.log(`✅ ${leasesForTenants.length} bail(s) trouvé(s) pour les locataires`);
+          leasesData = leasesForTenants;
+        } else {
+          console.log('ℹ️ Aucun bail trouvé pour les locataires');
         }
       }
 
@@ -465,87 +483,50 @@ export default function TenantRentalsPage() {
 
       console.log(`✅ ${leasesData.length} baux chargés au total`);
 
-      // Charger les propriétés séparément pour garantir la récupération
-      // Essayer à la fois properties et properties_02
-      const propertyIds = [...new Set(leasesData.map((lease: any) => lease.property_id).filter(Boolean))];
+      // Charger les propriétés séparément depuis properties_02 uniquement
+      const property02Ids = [...new Set(leasesData.map((lease: any) => lease.property_02_id).filter(Boolean))];
       let propertiesMap = new Map();
       
-      if (propertyIds.length > 0) {
+      if (property02Ids.length > 0) {
         console.log('📥 Tentative de chargement des propriétés depuis Supabase...');
-        console.log(`   • ${propertyIds.length} propriétés à charger`);
+        console.log(`   • ${property02Ids.length} propriétés (property_02_id) à charger`);
         
-        // Fonction helper pour charger depuis une table spécifique
-        const loadPropertiesFromTable = async (tableName: string) => {
-          const { data, error } = await supabase
-            .from(tableName)
-            .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
-            .in('id', propertyIds);
-          
-          if (error) {
-            console.warn(`   ⚠️ Erreur lors du chargement depuis ${tableName}:`, error.message);
-            return null;
-          }
-          
-          return data || [];
-        };
+        // Charger les propriétés depuis properties_02
+        const { data: properties02Data, error: properties02Error } = await supabase
+          .from('properties_02')
+          .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
+          .in('id', property02Ids);
         
-        // Essayer d'abord properties_02 (table la plus récente)
-        let propertiesData = await loadPropertiesFromTable('properties_02');
-        
-        // Si aucune donnée trouvée dans properties_02, essayer properties
-        if (!propertiesData || propertiesData.length === 0) {
-          console.log('🔄 Aucune propriété trouvée dans properties_02, essai avec properties...');
-          propertiesData = await loadPropertiesFromTable('properties');
-        }
-        
-        // Si toujours rien, essayer une par une dans les deux tables
-        if (!propertiesData || propertiesData.length === 0) {
-          console.log('🔄 Tentative de chargement une par une dans les deux tables...');
-          for (const propertyId of propertyIds) {
-            // Essayer d'abord properties_02
-            let propertyData = null;
-            let singleError = null;
-            
-            const { data: data02, error: error02 } = await supabase
+        if (properties02Error) {
+          console.warn('   ⚠️ Erreur lors du chargement depuis properties_02:', properties02Error.message);
+          // Essayer une par une en fallback
+          for (const propertyId of property02Ids) {
+            const { data: propertyData, error: singleError } = await supabase
               .from('properties_02')
               .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
               .eq('id', propertyId)
               .maybeSingle();
             
-            if (!error02 && data02) {
-              propertyData = data02;
-            } else {
-              // Essayer properties
-              const { data: dataOld, error: errorOld } = await supabase
-                .from('properties')
-                .select('id, title, address, city, property_type, surface_area, bedrooms, bathrooms, images')
-                .eq('id', propertyId)
-                .maybeSingle();
-              
-              if (!errorOld && dataOld) {
-                propertyData = dataOld;
-              } else {
-                singleError = error02 || errorOld;
-              }
-            }
-            
-            if (propertyData) {
+            if (!singleError && propertyData) {
               console.log(`   ✅ Propriété ${propertyId} chargée: ${propertyData.title || 'Sans titre'}`);
               propertiesMap.set(propertyData.id, propertyData);
             } else {
-              console.warn(`   ⚠️ Propriété ${propertyId} non trouvée dans properties_02 ni properties:`, singleError?.message || 'Aucune donnée');
+              console.warn(`   ⚠️ Propriété ${propertyId} non trouvée:`, singleError?.message || 'Aucune donnée');
             }
           }
-        } else {
-          // Propriétés chargées avec succès
-          console.log(`✅ ${propertiesData.length} propriétés chargées avec succès`);
-          propertiesData.forEach((prop: any) => {
-            console.log(`   • ${prop.id}: ${prop.title || 'Sans titre'}`);
+        } else if (properties02Data && properties02Data.length > 0) {
+          console.log(`✅ ${properties02Data.length} propriétés chargées avec succès`);
+          properties02Data.forEach((prop: any) => {
+            console.log(`   • ${prop.id}: ${prop.title || 'Sans titre'}`, {
+              title: prop.title,
+              imagesCount: prop.images ? (Array.isArray(prop.images) ? prop.images.length : 0) : 0,
+              firstImage: prop.images && Array.isArray(prop.images) && prop.images.length > 0 ? prop.images[0] : 'Aucune image'
+            });
             propertiesMap.set(prop.id, prop);
           });
         }
       } else {
-        console.warn('⚠️ Aucun property_id trouvé dans les baux');
+        console.warn('⚠️ Aucun property_02_id trouvé dans les baux');
       }
       
       console.log('📋 Map finale des propriétés:', Array.from(propertiesMap.keys()));
@@ -577,7 +558,7 @@ export default function TenantRentalsPage() {
         if (!leasesMap.has(lease.id)) {
           leasesMap.set(lease.id, {
             ...lease,
-            properties: propertiesMap.get(lease.property_id) || null,
+            properties: propertiesMap.get(lease.property_02_id) || null,
             users_2025_12_01_11_29: ownersMap.get(lease.owner_id) || null
           });
         }
@@ -613,6 +594,21 @@ export default function TenantRentalsPage() {
         const isSigned = !!lease.signed_at;
         const isPendingSignature = lease.status === 'pending_signature';
         
+        // Debug: vérifier que la propriété est bien chargée
+        if (!property) {
+          console.warn(`⚠️ Propriété non trouvée pour le bail ${lease.id}, property_02_id: ${lease.property_02_id}`);
+        } else {
+          console.log(`✅ Propriété chargée pour le bail ${lease.id}:`, {
+            id: property.id,
+            title: property.title,
+            titleType: typeof property.title,
+            images: property.images,
+            imagesType: Array.isArray(property.images) ? 'array' : typeof property.images,
+            imagesCount: property.images ? (Array.isArray(property.images) ? property.images.length : 0) : 0,
+            firstImage: property.images && Array.isArray(property.images) && property.images.length > 0 ? property.images[0] : 'Aucune image'
+          });
+        }
+        
         // Récupérer les paiements pour ce bail
         const payments = paymentsMap.get(lease.id) || [];
         const unpaidRents = payments
@@ -644,14 +640,21 @@ export default function TenantRentalsPage() {
             };
           });
         
+        // Récupérer la première image depuis Supabase Storage (les images sont déjà des URLs complètes)
+        let propertyImage = null;
+        if (property?.images && Array.isArray(property.images) && property.images.length > 0) {
+          // Les images sont déjà des URLs complètes depuis Supabase Storage
+          propertyImage = property.images[0];
+        }
+        
         return {
           id: lease.id,
           property: property?.title || 'Bien inconnu',
           property_title: property?.title || 'Bien inconnu',
-          property_address: property ? `${property.address}, ${property.city}` : '',
+          property_address: property ? `${property.address || ''}${property.address && property.city ? ', ' : ''}${property.city || ''}`.trim() : '',
           owner_name: owner?.full_name || 'Propriétaire inconnu',
           owner_id: lease.owner_id,
-          property_id: lease.property_id,
+          property_02_id: lease.property_02_id,
           rent: `${lease.monthly_rent.toLocaleString('fr-FR')} FCFA`,
           monthly_rent: lease.monthly_rent,
           start_date: lease.start_date,
@@ -667,19 +670,17 @@ export default function TenantRentalsPage() {
           article9: lease.article9,
           article10: lease.article10,
           additional_notes: lease.additional_notes,
-          image: property?.images && property.images.length > 0 
-            ? property.images[0] 
-            : `https://readdy.ai/api/search-image?query=property&width=400&height=300&seq=rental${lease.id}`,
+          image: propertyImage,
           surface: `${property?.surface_area || 0} m²`,
           type: property?.property_type || 'Appartement',
-          address: property ? `${property.address}, ${property.city}` : '',
-          description: '',
+          address: property ? `${property.address || ''}${property.address && property.city ? ', ' : ''}${property.city || ''}`.trim() : '',
+          description: property?.description || '',
           landlord: owner?.full_name || 'Propriétaire inconnu',
           startDate: lease.start_date ? new Date(lease.start_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
           endDate: lease.end_date ? new Date(lease.end_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '',
           unpaidRents: unpaidRents,
           paidRents: paidRents,
-      inventories: []
+          inventories: []
         };
       });
 

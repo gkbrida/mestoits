@@ -19,11 +19,15 @@ export default function InscriptionPage() {
     confirmPassword: '',
     affiliationCode: '',
     companyName: '',
-    siret: '',
+    commerceRegisterNumber: '',
+    professionType: '',
     professionalCard: '',
     companyAddress: '',
     city: '',
   });
+  
+  const [professionalTypes, setProfessionalTypes] = useState<any[]>([]);
+  const [cities, setCities] = useState<string[]>([]);
 
   // Charger le code d'affiliation depuis l'URL si présent
   useEffect(() => {
@@ -35,6 +39,48 @@ export default function InscriptionPage() {
       }));
     }
   }, [searchParams]);
+
+  // Charger les types de professionnels et les communes
+  useEffect(() => {
+    const loadProfessionalTypes = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('professional_types')
+          .select('name, label')
+          .eq('is_active', true)
+          .order('display_order', { ascending: true });
+        
+        if (error) {
+          console.error('Erreur lors du chargement des types de professionnels:', error);
+        } else {
+          setProfessionalTypes(data || []);
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des types de professionnels:', error);
+      }
+    };
+
+    const loadCities = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('localities')
+          .select('commune')
+          .not('commune', 'is', null);
+        
+        if (error) {
+          console.error('Erreur lors du chargement des communes:', error);
+        } else {
+          const uniqueCities = [...new Set((data || []).map(item => item.commune).filter(Boolean))].sort();
+          setCities(uniqueCities);
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des communes:', error);
+      }
+    };
+
+    loadProfessionalTypes();
+    loadCities();
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({
@@ -62,7 +108,7 @@ export default function InscriptionPage() {
         throw new Error('Le mot de passe doit contenir au moins 6 caractères');
       }
 
-      if (isProfessional && (!formData.companyName || !formData.siret)) {
+      if (isProfessional && (!formData.companyName || !formData.professionType || !formData.city)) {
         throw new Error('Veuillez remplir tous les champs obligatoires pour les professionnels');
       }
 
@@ -144,7 +190,8 @@ export default function InscriptionPage() {
           phone: formData.phone,
           user_type: isProfessional ? 'professional' : 'individual',
           company_name: isProfessional ? formData.companyName : null,
-          siret: isProfessional ? formData.siret : null,
+          siret: isProfessional ? (formData.commerceRegisterNumber || null) : null,
+          profession_type: isProfessional ? formData.professionType : null,
           professional_card: isProfessional ? formData.professionalCard : null,
           company_address: isProfessional ? formData.companyAddress : null,
           city: isProfessional ? formData.city : null,
@@ -389,17 +436,36 @@ export default function InscriptionPage() {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Profession *
+                </label>
+                <select
+                  name="professionType"
+                  value={formData.professionType}
+                  onChange={handleChange}
+                  required={isProfessional}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-white"
+                >
+                  <option value="">Sélectionnez votre profession</option>
+                  {professionalTypes.map((type) => (
+                    <option key={type.name} value={type.name}>
+                      {type.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    SIRET *
+                    Numéro du registre de commerce
                   </label>
                   <input
                     type="text"
-                    name="siret"
-                    value={formData.siret}
+                    name="commerceRegisterNumber"
+                    value={formData.commerceRegisterNumber}
                     onChange={handleChange}
-                    required={isProfessional}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-white"
                     placeholder="123 456 789 00012"
                   />
@@ -435,16 +501,22 @@ export default function InscriptionPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Ville
+                  Ville / Commune *
                 </label>
-                <input
-                  type="text"
+                <select
                   name="city"
                   value={formData.city}
                   onChange={handleChange}
+                  required={isProfessional}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-teal-500 focus:border-transparent bg-white"
-                  placeholder="Paris"
-                />
+                >
+                  <option value="">Sélectionnez une ville / commune</option>
+                  {cities.map((city) => (
+                    <option key={city} value={city}>
+                      {city}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
           )}

@@ -48,13 +48,10 @@ export default function MentionsLegalesPage() {
                   <strong className="text-gray-900">Siège social :</strong> 123 Avenue de la République, 75011 Paris, France
                 </p>
                 <p>
-                  <strong className="text-gray-900">SIRET :</strong> 123 456 789 00012
+                  <strong className="text-gray-900">RCC :</strong> 123 456 789 00012
                 </p>
                 <p>
-                  <strong className="text-gray-900">RCS :</strong> Paris B 123 456 789
-                </p>
-                <p>
-                  <strong className="text-gray-900">Numéro de TVA intracommunautaire :</strong> FR 12 123456789
+                  <strong className="text-gray-900">RCS :</strong> Abidjan B 123 456 789
                 </p>
                 <p>
                   <strong className="text-gray-900">Directeur de la publication :</strong> Jean Dupont
@@ -141,7 +138,7 @@ export default function MentionsLegalesPage() {
                 </p>
                 <ul className="list-disc list-inside space-y-2 ml-4">
                   <li>Par email : <a href="mailto:dpo@immoconnect.fr" className="text-teal-600 hover:text-teal-700 cursor-pointer">dpo@immoconnect.fr</a></li>
-                  <li>Par courrier : ImmoConnect SARL - Service DPO, 123 Avenue de la République, 75011 Paris, France</li>
+                  <li>Par courrier : ImmoConnect SARL - Service DPO, 123 Avenue de la République, Abidjan, Côte d'Ivoire</li>
                 </ul>
                 <p>
                   Les informations recueillies sur ce site sont enregistrées dans un fichier informatisé par ImmoConnect pour la gestion des utilisateurs et des annonces immobilières. Elles sont conservées pendant 3 ans et sont destinées au service client et au service technique.

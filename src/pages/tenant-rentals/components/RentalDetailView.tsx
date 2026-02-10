@@ -24,15 +24,15 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
   const [processingPayment, setProcessingPayment] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
 
-  // Charger les détails complets de la propriété
+  // Charger les détails complets de la propriété depuis properties_02
   useEffect(() => {
-    if (rental?.property_id) {
+    if (rental?.property_02_id) {
       loadPropertyDetails();
     }
-  }, [rental?.property_id]);
+  }, [rental?.property_02_id]);
 
   const loadPropertyDetails = async () => {
-    if (!rental?.property_id) {
+    if (!rental?.property_02_id) {
       setLoadingProperty(false);
       return;
     }
@@ -40,14 +40,13 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
     try {
       setLoadingProperty(true);
       const { data, error } = await supabase
-        .from('properties')
+        .from('properties_02')
         .select('*')
-        .eq('id', rental.property_id)
-        .maybeSingle(); // Utiliser maybeSingle() au lieu de single() pour éviter l'erreur si aucune ligne
+        .eq('id', rental.property_02_id)
+        .maybeSingle();
 
       if (error) {
         console.error('Erreur lors du chargement de la propriété:', error);
-        // Ne pas bloquer l'interface si la propriété n'est pas trouvée
         setPropertyDetails(null);
         return;
       }
@@ -55,7 +54,7 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
       if (data) {
         setPropertyDetails(data);
       } else {
-        console.warn('Propriété non trouvée pour property_id:', rental.property_id);
+        console.warn('Propriété non trouvée pour property_02_id:', rental.property_02_id);
         setPropertyDetails(null);
       }
     } catch (error) {
@@ -425,7 +424,7 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
         sender_id: user.id,
         receiver_id: rental.owner_id,
         content: messageData.message.trim(), // Utiliser 'content' au lieu de 'message'
-        property_id: rental.property_id || null,
+        property_02_id: rental.property_02_id || null,
         read: false, // Utiliser 'read' au lieu de 'is_read'
       });
 

@@ -41,21 +41,21 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
         return;
       }
 
-      // Charger la propriété séparément pour garantir la récupération
+      // Charger la propriété séparément depuis properties_02
       let propertyData = null;
-      if (leaseData.property_id) {
+      if (leaseData.property_02_id) {
         const { data: propData, error: propError } = await supabase
-          .from('properties')
+          .from('properties_02')
           .select('*')
-          .eq('id', leaseData.property_id)
-          .maybeSingle(); // Utiliser maybeSingle() au lieu de single() pour éviter l'erreur si aucune ligne
+          .eq('id', leaseData.property_02_id)
+          .maybeSingle();
 
         if (propError) {
           console.error('Erreur lors du chargement de la propriété:', propError);
         } else if (propData) {
           propertyData = propData;
         } else {
-          console.warn('Propriété non trouvée pour property_id:', leaseData.property_id);
+          console.warn('Propriété non trouvée pour property_02_id:', leaseData.property_02_id);
         }
       }
 
@@ -357,7 +357,7 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
             <div className="pt-4 border-t border-gray-300">
               <p className="text-xs text-gray-600">
                 Fait en deux exemplaires originaux<br />
-                À Lyon, le {new Date().toLocaleDateString('fr-FR')}
+                À Abidjan, le {new Date().toLocaleDateString('fr-FR')}
               </p>
             </div>
           </div>
