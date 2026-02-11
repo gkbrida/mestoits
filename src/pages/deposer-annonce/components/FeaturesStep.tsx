@@ -16,7 +16,6 @@ export default function FeaturesStep({ data, onUpdate, onValidationChange }: Fea
   }, []);
 
   const isResidentialType = ['villa', 'apartment', 'house', 'furnished-residence'].includes(data.property_type);
-  const isVillaOrHouse = ['villa', 'house'].includes(data.property_type);
   const isApartment = data.property_type === 'apartment' || data.property_type === 'furnished-residence';
 
   // Équipements pour Villa / Appartement / Maison

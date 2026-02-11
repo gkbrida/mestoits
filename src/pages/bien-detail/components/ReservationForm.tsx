@@ -26,12 +26,39 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
   const [selectedReservation, setSelectedReservation] = useState<any>(null);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
   const [processingPayment, setProcessingPayment] = useState(false);
+  const [, setExpiryCheckTick] = useState(0);
 
   useEffect(() => {
     checkAuth();
     loadUnavailableDates();
     loadPropertyDetails();
   }, [propertyId]);
+
+  // À l’arrivée sur la page (ex. après rafraîchissement), annuler les réservations pending non payées de l’utilisateur
+  useEffect(() => {
+    if (!propertyId || !userData?.email) return;
+    const cancelOrphanedPending = async () => {
+      try {
+        await supabase
+          .from('reservations')
+          .update({ status: 'cancelled' })
+          .eq('property_id', propertyId)
+          .eq('guest_email', userData.email)
+          .eq('status', 'pending');
+        await loadUnavailableDates();
+      } catch (e) {
+        console.error('Erreur lors de l\'annulation des réservations orphelines:', e);
+      }
+    };
+    cancelOrphanedPending();
+  }, [propertyId, userData?.email]);
+
+  // Rafraîchir l'état d'expiration toutes les 30s quand le modal de paiement est ouvert
+  useEffect(() => {
+    if (!showPaymentModal || !selectedReservation?.createdAt) return;
+    const interval = setInterval(() => setExpiryCheckTick((t) => t + 1), 30_000);
+    return () => clearInterval(interval);
+  }, [showPaymentModal, selectedReservation?.createdAt]);
 
   const loadPropertyDetails = async () => {
     try {
@@ -80,7 +107,7 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
       // Charger les réservations en attente et confirmées pour ce bien
       const { data: reservations, error } = await supabase
         .from('reservations')
-        .select('start_date, end_date')
+        .select('start_date, end_date, status, created_at')
         .eq('property_id', propertyId)
         .in('status', ['pending', 'confirmed']);
 
@@ -89,9 +116,19 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
         return;
       }
 
+      // Les réservations "pending" non payées après 15 min sont libérées
+      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const validReservations = (reservations || []).filter((r: any) => {
+        if (r.status === 'confirmed') return true;
+        if (r.status === 'pending' && r.created_at) {
+          return new Date(r.created_at) > fifteenMinutesAgo;
+        }
+        return true; // par défaut, inclure
+      });
+
       // Extraire toutes les dates entre start_date et end_date pour chaque réservation
       const dates: string[] = [];
-      reservations?.forEach((reservation) => {
+      validReservations.forEach((reservation: any) => {
         const start = new Date(reservation.start_date);
         const end = new Date(reservation.end_date);
         const currentDate = new Date(start);
@@ -273,6 +310,7 @@ L'équipe Mestoits`;
         nights,
         startDate,
         endDate,
+        createdAt: reservationData.created_at || new Date().toISOString(),
       });
       setShowPaymentModal(true);
       setPaymentLoading(false);
@@ -284,8 +322,35 @@ L'équipe Mestoits`;
     }
   };
 
+  const handleClosePaymentModal = async () => {
+    if (selectedReservation?.id) {
+      try {
+        await supabase
+          .from('reservations')
+          .update({ status: 'cancelled' })
+          .eq('id', selectedReservation.id);
+      } catch (e) {
+        console.error('Erreur lors de l\'annulation de la réservation:', e);
+      }
+      await loadUnavailableDates();
+    }
+    setShowPaymentModal(false);
+    setSelectedReservation(null);
+    setSelectedPaymentMethod('stripe');
+  };
+
+  const RESERVATION_DEADLINE_MINUTES = 15;
+  const isReservationExpired = selectedReservation?.createdAt
+    ? (Date.now() - new Date(selectedReservation.createdAt).getTime()) > RESERVATION_DEADLINE_MINUTES * 60 * 1000
+    : false;
+
   const handleConfirmPayment = async () => {
     if (!selectedReservation || !userData) return;
+    if (isReservationExpired) {
+      alert('Le délai de paiement est dépassé. La réservation a été libérée. Veuillez sélectionner à nouveau vos dates.');
+      handleClosePaymentModal();
+      return;
+    }
 
     setProcessingPayment(true);
     try {
@@ -321,8 +386,20 @@ L'équipe Mestoits`;
       });
 
       if (!response.ok) {
+        const contentType = response.headers.get('content-type');
         const errorText = await response.text();
-        throw new Error(`Erreur ${response.status}: ${errorText || response.statusText}`);
+        let message = response.statusText;
+        if (contentType?.includes('application/json')) {
+          try {
+            const err = JSON.parse(errorText);
+            message = err.error || err.message || errorText;
+          } catch {
+            message = errorText;
+          }
+        } else if (errorText) {
+          message = errorText;
+        }
+        throw new Error(message);
       }
 
       const result = await response.json();
@@ -464,15 +541,12 @@ L'équipe Mestoits`;
 
       {/* Payment Modal */}
       {showPaymentModal && selectedReservation && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h3 className="text-xl sm:text-2xl font-bold text-gray-900">Confirmer le paiement</h3>
               <button
-                onClick={() => {
-                  setShowPaymentModal(false);
-                  setSelectedPaymentMethod('stripe');
-                }}
+                onClick={handleClosePaymentModal}
                 className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer flex-shrink-0"
               >
                 <i className="ri-close-line text-xl sm:text-2xl"></i>
@@ -559,6 +633,27 @@ L'équipe Mestoits`;
               </div>
             </div>
 
+            <div className={`rounded-lg md:rounded-xl p-3 sm:p-4 mb-3 sm:mb-4 border-2 ${
+              isReservationExpired 
+                ? 'bg-red-50 border-red-200' 
+                : 'bg-amber-50 border-amber-200'
+            }`}>
+              <div className="flex gap-2 sm:gap-3">
+                <i className={`text-lg sm:text-xl w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center flex-shrink-0 mt-0.5 ${
+                  isReservationExpired ? 'ri-error-warning-line text-red-600' : 'ri-time-line text-amber-600'
+                }`}></i>
+                <p className={`text-xs sm:text-sm font-medium ${
+                  isReservationExpired ? 'text-red-900' : 'text-amber-900'
+                }`}>
+                  {isReservationExpired ? (
+                    <>Le délai de <strong>15 minutes</strong> est dépassé. Cette réservation a été libérée. Veuillez fermer cette fenêtre et sélectionner à nouveau vos dates.</>
+                  ) : (
+                    <>Vous avez <strong>15 minutes</strong> pour effectuer le paiement et confirmer votre réservation. Passé ce délai, la plage de dates sera automatiquement libérée et vous ne pourrez plus payer.</>
+                  )}
+                </p>
+              </div>
+            </div>
+
             <div className="bg-blue-50 border-2 border-blue-200 rounded-lg md:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
               <div className="flex gap-2 sm:gap-3">
                 <i className="ri-information-line text-blue-600 text-lg sm:text-xl w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center flex-shrink-0 mt-0.5"></i>
@@ -572,17 +667,14 @@ L'équipe Mestoits`;
 
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
               <button
-                onClick={() => {
-                  setShowPaymentModal(false);
-                  setSelectedPaymentMethod('stripe');
-                }}
+                onClick={handleClosePaymentModal}
                 className="flex-1 px-4 sm:px-6 py-2.5 sm:py-3 border-2 border-gray-200 text-gray-700 rounded-lg md:rounded-xl text-sm sm:text-base font-medium hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
               >
                 Annuler
               </button>
               <button
                 onClick={handleConfirmPayment}
-                disabled={processingPayment}
+                disabled={processingPayment || isReservationExpired}
                 className="flex-1 flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-sm sm:text-base font-medium hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
               >
                 {processingPayment ? (

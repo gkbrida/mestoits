@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 
 // CORS headers
 const corsHeaders = {
@@ -76,6 +77,39 @@ export default async function handler(
         success: false,
         error: `Montant invalide: ${amount}. Le montant doit être un nombre positif.`
       });
+    }
+
+    // Vérifier que la réservation est encore payable (pending et < 15 min)
+    if (reservationId) {
+      const supabaseUrl = process.env.VITE_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+      const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (supabaseUrl && supabaseServiceKey) {
+        const supabase = createClient(supabaseUrl, supabaseServiceKey);
+        const { data: reservation, error: resError } = await supabase
+          .from('reservations')
+          .select('id, status, created_at')
+          .eq('id', reservationId)
+          .single();
+        if (resError || !reservation) {
+          return res.status(400).json({
+            success: false,
+            error: 'Réservation introuvable ou invalide.'
+          });
+        }
+        if (reservation.status !== 'pending') {
+          return res.status(400).json({
+            success: false,
+            error: 'Cette réservation n\'est plus disponible pour le paiement (délai dépassé ou déjà traitée).'
+          });
+        }
+        const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+        if (new Date(reservation.created_at) < fifteenMinutesAgo) {
+          return res.status(400).json({
+            success: false,
+            error: 'Le délai de paiement (15 minutes) est dépassé. La réservation a été libérée. Veuillez recommencer.'
+          });
+        }
+      }
     }
 
     // PayDunya utilise le montant en XOF directement (pas de conversion en centimes)

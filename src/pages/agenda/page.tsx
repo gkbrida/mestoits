@@ -213,7 +213,7 @@ export default function AgendaPage() {
         const leaseIds = [...new Set(payments.map((p: any) => p.lease_id).filter(Boolean))];
         const { data: leases, error: leasesError } = await supabase
           .from('leases')
-          .select('id, property_id, owner_id, tenant_id')
+          .select('id, property_02_id, owner_id, tenant_id')
           .in('id', leaseIds);
 
         if (leasesError) {
@@ -222,38 +222,19 @@ export default function AgendaPage() {
         }
 
         // Charger les propriétés properties_02 séparément
-        const propertyIds = [...new Set(leases?.map((l: any) => l.property_id).filter(Boolean) || [])];
+        // Utiliser property_02_id si disponible, sinon property_id (pour compatibilité)
+        const propertyIds = [...new Set(
+          leases?.map((l: any) => l.property_02_id || l.property_id).filter(Boolean) || []
+        )];
         
-        // Essayer d'abord properties_02 (table principale)
-        let properties: any[] = [];
-        const { data: properties02, error: properties02Error } = await supabase
+        const { data: properties, error: propertiesError } = await supabase
           .from('properties_02')
           .select('id, title, address, city, owner_id')
           .in('id', propertyIds);
 
-        if (properties02Error) {
-          console.error('Erreur lors du chargement des propriétés depuis properties_02:', properties02Error);
-        } else {
-          properties = properties02 || [];
-        }
-
-        // Si certaines propriétés ne sont pas trouvées dans properties_02, essayer properties (ancienne table)
-        const foundPropertyIds = new Set(properties.map(p => p.id));
-        const missingPropertyIds = propertyIds.filter(id => !foundPropertyIds.has(id));
-        
-        if (missingPropertyIds.length > 0) {
-          console.log('📅 Debug - Propriétés non trouvées dans properties_02, recherche dans properties:', missingPropertyIds.length);
-          const { data: propertiesOld, error: propertiesOldError } = await supabase
-            .from('properties')
-            .select('id, title, address, city, owner_id')
-            .in('id', missingPropertyIds);
-
-          if (propertiesOldError) {
-            console.error('Erreur lors du chargement des propriétés depuis properties:', propertiesOldError);
-          } else if (propertiesOld && propertiesOld.length > 0) {
-            properties = [...properties, ...propertiesOld];
-            console.log('📅 Debug - Propriétés trouvées dans properties (ancienne table):', propertiesOld.length);
-          }
+        if (propertiesError) {
+          console.error('Erreur lors du chargement des propriétés:', propertiesError);
+          throw propertiesError;
         }
 
         // Charger les locataires séparément
@@ -282,18 +263,20 @@ export default function AgendaPage() {
         const userEmailForPayments = authUserForPayments?.email;
         
         paymentEvents = (payments || [])
-          .filter((payment: any) => {
+          .map((payment: any) => {
             // Récupérer les données associées depuis les Maps
             const lease = leasesMap.get(payment.lease_id);
             if (!lease) {
-              console.log('📅 Debug - Paiement filtré: bail non trouvé', payment.id);
-              return false;
+              console.log('📅 Debug - Paiement ignoré: bail non trouvé', payment.id);
+              return null;
             }
             
-            const property = propertiesMap.get(lease.property_id);
+            // Utiliser property_02_id
+            const propertyId = lease.property_02_id;
+            const property = propertiesMap.get(propertyId);
             if (!property) {
-              console.log('📅 Debug - Paiement filtré: propriété non trouvée', payment.id, 'property_id:', lease.property_id);
-              return false;
+              console.log('📅 Debug - Paiement ignoré: propriété non trouvée', payment.id, 'property_id:', propertyId);
+              return null;
             }
             
             const tenant = tenantsMap.get(lease.tenant_id);
@@ -313,16 +296,11 @@ export default function AgendaPage() {
               userEmail: userEmailForPayments
             });
             
-            // Filtrer uniquement les paiements où l'utilisateur est propriétaire ou locataire
-            return isOwner || isTenant;
-          })
-          .map((payment: any) => {
-            // Récupérer les données associées depuis les Maps
-            const lease = leasesMap.get(payment.lease_id);
-            const property = lease ? propertiesMap.get(lease.property_id) : null;
-            
-            // Vérifier si l'utilisateur est propriétaire pour ce paiement
-            const isOwner = property?.owner_id === userId;
+            // Ne pas filtrer ici - on garde tous les paiements et on vérifie juste les permissions dans l'affichage
+            // Si l'utilisateur n'est ni propriétaire ni locataire, on retourne null pour l'exclure
+            if (!isOwner && !isTenant) {
+              return null;
+            }
             
             // Utiliser due_date de la table payments pour représenter le paiement
             const dueDate = new Date(payment.due_date);
@@ -354,7 +332,8 @@ export default function AgendaPage() {
               leaseId: payment.lease_id,
               isOwner: isOwner,
             };
-          });
+          })
+          .filter((event) => event !== null) as CalendarEvent[];
 
         console.log('📅 Debug - Paiements filtrés (événements créés):', paymentEvents.length);
       } else {

@@ -87,7 +87,7 @@ export default function PropertiesTab({ propertyId }: PropertiesTabProps) {
           .order('created_at', { ascending: false }),
         supabase
           .from('leases')
-          .select('property_id, tenant_id, start_date, end_date, status')
+          .select('property_02_id, tenant_id, start_date, end_date, status')
           .eq('owner_id', userId)
           .in('status', ['active', 'pending_signature'])
       ]);
@@ -134,10 +134,10 @@ export default function PropertiesTab({ propertyId }: PropertiesTabProps) {
         }
       }
 
-      // Créer une map des baux par property_id avec les informations du locataire
+      // Créer une map des baux par property_02_id avec les informations du locataire
       const leasesMap = new Map();
       (leasesData || []).forEach((lease: any) => {
-        const propId = lease.property_id;
+        const propId = lease.property_02_id;
         const tenant = tenantsMap.get(lease.tenant_id);
         
         if (!leasesMap.has(propId)) {
