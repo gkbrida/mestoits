@@ -1,6 +1,7 @@
 import { useNavigate, Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
+import { areRestrictionsEnabled } from '../../utils/subscriptionUtils';
 
 interface SideMenuProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ export default function SideMenu({ isOpen, onClose }: SideMenuProps) {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [subscriptionsEnabled, setSubscriptionsEnabled] = useState(false);
 
   useEffect(() => {
     // Vérifier l'état de connexion
@@ -25,6 +27,7 @@ export default function SideMenu({ isOpen, onClose }: SideMenuProps) {
     };
 
     checkAuth();
+    areRestrictionsEnabled().then(setSubscriptionsEnabled);
 
     // Écouter les changements d'authentification
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -172,6 +175,16 @@ export default function SideMenu({ isOpen, onClose }: SideMenuProps) {
                   <i className="ri-bank-card-line text-xl w-5 h-5 flex items-center justify-center"></i>
                   <span className="font-medium">Mes paiements échelonnés</span>
                 </button>
+
+                {subscriptionsEnabled && (
+                  <button
+                    onClick={() => handleNavigation('/mon-abonnement')}
+                    className="w-full flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <i className="ri-vip-crown-line text-xl w-5 h-5 flex items-center justify-center"></i>
+                    <span className="font-medium">Mon abonnement</span>
+                  </button>
+                )}
 
                 <div className="border-t border-gray-200 my-4"></div>
 

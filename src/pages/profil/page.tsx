@@ -8,12 +8,13 @@ import Footer from '../../components/feature/Footer';
 import PersonalInfoTab from './components/PersonalInfoTab';
 import ProfessionalTab from './components/ProfessionalTab';
 import SecurityTab from './components/SecurityTab';
+import WalletTab from './components/WalletTab';
 export default function ProfilPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'personal' | 'professional' | 'security'>('personal');
+  const [activeTab, setActiveTab] = useState<'personal' | 'professional' | 'security' | 'wallet'>('personal');
 
   useEffect(() => {
     checkAuth();
@@ -22,9 +23,9 @@ export default function ProfilPage() {
   // Gérer l'onglet depuis l'URL
   useEffect(() => {
     const tabParam = searchParams.get('tab');
-    if (tabParam === 'professional') {
-      setActiveTab('professional');
-    }
+    if (tabParam === 'professional') setActiveTab('professional');
+    else if (tabParam === 'wallet') setActiveTab('wallet');
+    else if (tabParam === 'security') setActiveTab('security');
   }, [searchParams]);
 
   const checkAuth = async () => {
@@ -94,6 +95,17 @@ export default function ProfilPage() {
                 <span className="sm:hidden">Professionnel</span>
               </button>
               <button
+                onClick={() => setActiveTab('wallet')}
+                className={`flex-1 px-4 sm:px-6 py-3 sm:py-4 text-sm sm:text-base font-semibold transition-all whitespace-nowrap cursor-pointer ${
+                  activeTab === 'wallet'
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <i className="ri-wallet-line mr-2 w-4 h-4 sm:w-5 sm:h-5 inline-flex items-center justify-center"></i>
+                Portefeuille
+              </button>
+              <button
                 onClick={() => setActiveTab('security')}
                 className={`flex-1 px-4 sm:px-6 py-3 sm:py-4 text-sm sm:text-base font-semibold transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'security'
@@ -110,6 +122,7 @@ export default function ProfilPage() {
               {activeTab === 'personal' && <PersonalInfoTab />}
               {activeTab === 'professional' && <ProfessionalTab />}
               {activeTab === 'security' && <SecurityTab />}
+              {activeTab === 'wallet' && <WalletTab />}
             </div>
           </div>
 
