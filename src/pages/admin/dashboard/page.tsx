@@ -6,12 +6,13 @@ import UsersManagementTab from '../components/UsersManagementTab';
 import PropertiesManagementTab from '../components/PropertiesManagementTab';
 import SubscriptionsTab from '../components/SubscriptionsTab';
 import CommissionsTab from '../components/CommissionsTab';
+import AffiliationTab from '../components/AffiliationTab';
 import SettingsTab from '../components/SettingsTab';
 
 export default function AdminDashboardPage() {
   const navigate = useNavigate();
   const { admin, logout, isAuthenticated, isLoading } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState<'statistics' | 'users' | 'properties' | 'subscriptions' | 'commissions' | 'settings'>('statistics');
+  const [activeTab, setActiveTab] = useState<'statistics' | 'users' | 'properties' | 'subscriptions' | 'commissions' | 'affiliation' | 'settings'>('statistics');
 
   // Rediriger vers la page de connexion si non authentifié
   if (!isLoading && !isAuthenticated) {
@@ -128,6 +129,17 @@ export default function AdminDashboardPage() {
                 Commissions
               </button>
               <button
+                onClick={() => setActiveTab('affiliation')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  activeTab === 'affiliation'
+                    ? 'border-teal-500 text-teal-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                <i className="ri-user-shared-line mr-2"></i>
+                Affiliation
+              </button>
+              <button
                 onClick={() => setActiveTab('settings')}
                 className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === 'settings'
@@ -149,6 +161,7 @@ export default function AdminDashboardPage() {
           {activeTab === 'properties' && <PropertiesManagementTab />}
           {activeTab === 'subscriptions' && <SubscriptionsTab />}
           {activeTab === 'commissions' && <CommissionsTab />}
+          {activeTab === 'affiliation' && <AffiliationTab />}
           {activeTab === 'settings' && <SettingsTab />}
         </div>
       </div>
