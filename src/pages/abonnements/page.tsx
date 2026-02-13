@@ -4,7 +4,8 @@ import { supabase } from '../../lib/supabase';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
-import { getUserActivePlan, SubscriptionPlan } from '../../utils/subscriptionUtils';
+import { getUserActivePlan, getUserActiveSubscription } from '../../utils/subscriptionUtils';
+import type { SubscriptionPlan } from '../../utils/subscriptionUtils';
 
 export default function AbonnementsPage() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ export default function AbonnementsPage() {
   const [user, setUser] = useState<any>(null);
   const [userType, setUserType] = useState<'individual' | 'professional'>('individual');
   const [activePlan, setActivePlan] = useState<SubscriptionPlan | null>(null);
+  const [activeSubscription, setActiveSubscription] = useState<{ end_date: string | null } | null>(null);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan | null>(null);
   const [processing, setProcessing] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
@@ -34,7 +36,6 @@ export default function AbonnementsPage() {
   useEffect(() => {
     const paymentStatus = searchParams.get('payment');
     const planId = searchParams.get('planId');
-    const sessionId = searchParams.get('session_id');
 
     if (paymentStatus === 'success' && planId && user) {
       // Activer l'abonnement
@@ -51,31 +52,73 @@ export default function AbonnementsPage() {
     try {
       setProcessing(true);
 
-      // Désactiver l'ancien abonnement
-      if (activePlan) {
-        await supabase
-          .from('user_subscriptions')
-          .update({ status: 'cancelled' })
-          .eq('user_id', user.id)
-          .eq('status', 'active');
+      const today = new Date().toISOString().split('T')[0];
+      let plan = plans.find((p) => p.id === planId);
+      if (!plan) {
+        const { data: planData } = await supabase
+          .from('subscription_plans')
+          .select('*')
+          .eq('id', planId)
+          .single();
+        plan = planData;
       }
+      const isPaidMonthly = plan && plan.price > 0;
 
-      // Créer le nouvel abonnement
-      const { error } = await supabase
-        .from('user_subscriptions')
-        .insert({
+      // Vérifier si c'est un renouvellement (même plan actif avec end_date)
+      const result = await getUserActiveSubscription(user.id);
+      const isRenewal =
+        result &&
+        result.subscription.plan_id === planId &&
+        result.subscription.end_date &&
+        result.subscription.status === 'active';
+
+      if (isRenewal && result && result.subscription.end_date) {
+        // Renouvellement : prolonger end_date de 30 jours
+        const currentEnd = new Date(result.subscription.end_date);
+        const newEnd = new Date(currentEnd);
+        newEnd.setDate(newEnd.getDate() + 30);
+
+        const { error } = await supabase
+          .from('user_subscriptions')
+          .update({
+            end_date: newEnd.toISOString().split('T')[0],
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', result.subscription.id);
+
+        if (error) throw error;
+      } else {
+        // Nouvel abonnement : annuler l'ancien et créer le nouveau
+        if (activePlan) {
+          await supabase
+            .from('user_subscriptions')
+            .update({ status: 'cancelled' })
+            .eq('user_id', user.id)
+            .eq('status', 'active');
+        }
+
+        const endDate = isPaidMonthly
+          ? (() => {
+              const d = new Date();
+              d.setDate(d.getDate() + 30);
+              return d.toISOString().split('T')[0];
+            })()
+          : null;
+
+        const { error } = await supabase.from('user_subscriptions').insert({
           user_id: user.id,
           plan_id: planId,
-          start_date: new Date().toISOString().split('T')[0],
-          status: 'active'
+          start_date: today,
+          end_date: endDate,
+          status: 'active',
         });
 
-      if (error) throw error;
+        if (error) throw error;
+      }
 
       alert('Abonnement activé avec succès !');
       await loadActivePlan();
       setSelectedPlan(null);
-      // Nettoyer l'URL
       navigate('/abonnements', { replace: true });
     } catch (error: any) {
       console.error('Erreur lors de l\'activation de l\'abonnement:', error);
@@ -137,22 +180,35 @@ export default function AbonnementsPage() {
     if (!user) return;
 
     try {
-      const plan = await getUserActivePlan(user.id);
-      setActivePlan(plan);
+      const result = await getUserActiveSubscription(user.id);
+      if (result) {
+        setActivePlan(result.plan);
+        setActiveSubscription({ end_date: result.subscription.end_date });
+      } else {
+        const plan = await getUserActivePlan(user.id);
+        setActivePlan(plan);
+        setActiveSubscription(null);
+      }
     } catch (error) {
       console.error('Erreur lors du chargement du plan actif:', error);
     }
   };
 
   const handleSelectPlan = (plan: SubscriptionPlan) => {
-    // Si c'est le plan gratuit ou déjà actif, ne rien faire
-    if (plan.plan_type === 'free' || (activePlan && activePlan.id === plan.id)) {
+    if (plan.plan_type === 'free') return;
+
+    // Renouvellement : même plan actif avec end_date (abonnement payant mensuel)
+    const isRenewal = activePlan?.id === plan.id && plan.price > 0 && activeSubscription?.end_date;
+    if (isRenewal) {
+      setSelectedPlan(plan);
       return;
     }
 
-    // Vérifier que l'utilisateur peut s'abonner à ce plan (même type d'utilisateur)
+    // Déjà actif (plan gratuit ou sans fin)
+    if (activePlan && activePlan.id === plan.id) return;
+
     if (plan.user_type !== userType) {
-      alert(`Ce plan est réservé aux ${plan.user_type === 'professional' ? 'professionnels' : 'particuliers'}. Veuillez modifier votre type de compte pour y accéder.`);
+      alert(`Ce plan est réservé aux ${plan.user_type === 'professional' ? 'professionnels' : 'particuliers'}.`);
       return;
     }
 
@@ -176,13 +232,22 @@ export default function AbonnementsPage() {
             .eq('status', 'active');
         }
 
-        // Créer le nouvel abonnement
+        const today = new Date().toISOString().split('T')[0];
+        const endDate = selectedPlan.price > 0
+          ? (() => {
+              const d = new Date();
+              d.setDate(d.getDate() + 30);
+              return d.toISOString().split('T')[0];
+            })()
+          : null;
+
         const { error } = await supabase
           .from('user_subscriptions')
           .insert({
             user_id: user.id,
             plan_id: selectedPlan.id,
-            start_date: new Date().toISOString().split('T')[0],
+            start_date: today,
+            end_date: endDate,
             status: 'active'
           });
 
@@ -244,16 +309,7 @@ export default function AbonnementsPage() {
     }
   };
 
-  const getPlanTypeLabel = (planType: string) => {
-    const labels: Record<string, string> = {
-      'free': 'Gratuit',
-      'publish_only': 'Publication uniquement',
-      'directory_only': 'Annuaire uniquement',
-      'properties_only': 'Publication uniquement',
-      'full_access': 'Accès complet'
-    };
-    return labels[planType] || planType;
-  };
+
 
   const formatPrice = (price: number, currency: string = 'XOF') => {
     if (price === 0) return 'Gratuit';
@@ -263,8 +319,8 @@ export default function AbonnementsPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50">
-        <Navbar isMenuOpen={isMenuOpen} setIsMenuOpen={setIsMenuOpen} />
-        <SideMenu isOpen={isMenuOpen} setIsOpen={setIsMenuOpen} />
+        <Navbar onMenuToggle={() => setIsMenuOpen(true)} />
+        <SideMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
         <div className="flex items-center justify-center min-h-[60vh]">
           <div className="text-center">
             <i className="ri-loader-4-line text-4xl text-orange-600 animate-spin"></i>
@@ -278,8 +334,8 @@ export default function AbonnementsPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar isMenuOpen={isMenuOpen} setIsMenuOpen={setIsMenuOpen} />
-      <SideMenu isOpen={isMenuOpen} setIsOpen={setIsMenuOpen} />
+      <Navbar onMenuToggle={() => setIsMenuOpen(true)} />
+      <SideMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-24 pb-8">
         <div className="mb-8">
@@ -290,11 +346,34 @@ export default function AbonnementsPage() {
         </div>
 
         {activePlan && (
-          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <i className="ri-information-line mr-2"></i>
-              Plan actuel : <strong>{activePlan.name}</strong>
-            </p>
+          <div className="mb-6 space-y-3">
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <p className="text-sm text-blue-800">
+                <i className="ri-information-line mr-2"></i>
+                Plan actuel : <strong>{activePlan.name}</strong>
+                {activeSubscription?.end_date && (
+                  <span className="ml-2">
+                    – Expire le {new Date(activeSubscription.end_date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                  </span>
+                )}
+              </p>
+            </div>
+            {activePlan.price > 0 && activeSubscription?.end_date && (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <p className="text-sm text-amber-900">
+                  <i className="ri-time-line mr-2"></i>
+                  Votre abonnement expire le <strong>{new Date(activeSubscription.end_date).toLocaleDateString('fr-FR')}</strong>.
+                  Payer le mois suivant pour continuer sans interruption.
+                </p>
+                <button
+                  onClick={() => handleSelectPlan(activePlan)}
+                  className="px-4 py-2 bg-amber-600 text-white font-medium rounded-lg hover:bg-amber-700 whitespace-nowrap flex-shrink-0"
+                >
+                  <i className="ri-refresh-line mr-1"></i>
+                  Payer le mois suivant
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -342,7 +421,7 @@ export default function AbonnementsPage() {
 
                 <div className="mb-4">
                   <div className="text-3xl font-bold text-orange-600 mb-1">
-                    {formatPrice(plan.price, plan.currency)}
+                    {formatPrice(plan.price, plan.currency ?? 'XOF')}
                   </div>
                   {plan.price > 0 && (
                     <p className="text-sm text-gray-500">
@@ -432,7 +511,7 @@ export default function AbonnementsPage() {
                   </div>
                 )}
 
-                {isSelected && !isActive && plan.user_type === userType && (
+                {isSelected && (!isActive || (activePlan?.id === plan.id && plan.price > 0 && activeSubscription?.end_date)) && plan.user_type === userType && (
                   <div className="pt-4 border-t border-gray-200">
                     <div className="mb-4">
                       <label className="block text-sm font-medium text-gray-700 mb-2">

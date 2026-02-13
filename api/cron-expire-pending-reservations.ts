@@ -2,11 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Cron job pour expirer les réservations en attente de paiement (> 5 min)
+ * Cron job pour expirer les réservations en attente de paiement (> 15 min)
  * Libère les plages de dates pour d'autres clients
- * 
- * Configuration dans vercel.json - exécution toutes les 5 minutes :
- * "schedule": "*/15 * * * *"
+ *
+ * Configuration dans vercel.json - exécution toutes les 15 minutes.
  */
 
 export default async function handler(

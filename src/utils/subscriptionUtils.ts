@@ -7,6 +7,7 @@ export interface SubscriptionPlan {
   user_type: 'individual' | 'professional';
   plan_type: string;
   price: number;
+  currency?: string;
   features: {
     can_publish: boolean;
     can_access_rental_management: boolean;
@@ -160,6 +161,42 @@ export async function activateSubscription(userId: string, planId: string): Prom
   } catch (error) {
     console.error('Erreur lors de l\'activation de l\'abonnement:', error);
     throw error;
+  }
+}
+
+/**
+ * Obtient l'abonnement actif d'un utilisateur (avec plan et dates)
+ */
+export async function getUserActiveSubscription(userId: string): Promise<{
+  subscription: UserSubscription;
+  plan: SubscriptionPlan;
+} | null> {
+  try {
+    const { data: sub, error } = await supabase
+      .from('user_subscriptions')
+      .select('id, user_id, plan_id, start_date, end_date, status')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !sub) return null;
+
+    const { data: plan } = await supabase
+      .from('subscription_plans')
+      .select('*')
+      .eq('id', sub.plan_id)
+      .single();
+
+    if (!plan) return null;
+
+    return {
+      subscription: sub as UserSubscription,
+      plan: plan as SubscriptionPlan,
+    };
+  } catch {
+    return null;
   }
 }
 

@@ -4,7 +4,8 @@ import { supabase } from '../../lib/supabase';
 import Navbar from '../../components/feature/Navbar';
 import SideMenu from '../../components/feature/SideMenu';
 import Footer from '../../components/feature/Footer';
-import { getUserActivePlan, SubscriptionPlan, areRestrictionsEnabled } from '../../utils/subscriptionUtils';
+import { getUserActivePlan, getUserActiveSubscription, areRestrictionsEnabled } from '../../utils/subscriptionUtils';
+import type { SubscriptionPlan } from '../../utils/subscriptionUtils';
 
 interface SubscriptionHistoryItem {
   id: string;
@@ -25,8 +26,8 @@ export default function MonAbonnementPage() {
   const [loading, setLoading] = useState(true);
   const [subscriptionsEnabled, setSubscriptionsEnabled] = useState(false);
   const [activePlan, setActivePlan] = useState<SubscriptionPlan | null>(null);
+  const [activeSubscription, setActiveSubscription] = useState<{ end_date: string | null } | null>(null);
   const [history, setHistory] = useState<SubscriptionHistoryItem[]>([]);
-  const [user, setUser] = useState<any>(null);
 
   useEffect(() => {
     init();
@@ -39,7 +40,6 @@ export default function MonAbonnementPage() {
         navigate('/connexion');
         return;
       }
-      setUser(authUser);
 
       const enabled = await areRestrictionsEnabled();
       setSubscriptionsEnabled(enabled);
@@ -51,6 +51,9 @@ export default function MonAbonnementPage() {
 
       const plan = await getUserActivePlan(authUser.id);
       setActivePlan(plan);
+
+      const result = await getUserActiveSubscription(authUser.id);
+      setActiveSubscription(result ? { end_date: result.subscription.end_date } : null);
 
       const { data: subs, error } = await supabase
         .from('user_subscriptions')
@@ -156,21 +159,48 @@ export default function MonAbonnementPage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">Abonnement actuel</h2>
             {activePlan ? (
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                <div>
-                  <p className="text-xl font-bold text-gray-900">{activePlan.name}</p>
-                  <p className="text-sm text-gray-600 mt-1">{activePlan.description || ''}</p>
-                  <p className="text-lg font-semibold text-teal-600 mt-2">
-                    {formatPrice(activePlan.price, activePlan.currency || 'XOF')}
-                  </p>
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <p className="text-xl font-bold text-gray-900">{activePlan.name}</p>
+                    <p className="text-sm text-gray-600 mt-1">{activePlan.description || ''}</p>
+                    <p className="text-lg font-semibold text-teal-600 mt-2">
+                      {formatPrice(activePlan.price, activePlan.currency || 'XOF')}
+                    </p>
+                    {activePlan.price > 0 && activeSubscription?.end_date && (
+                      <p className="text-sm text-gray-600 mt-1">
+                        Expire le {formatDate(activeSubscription.end_date)}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    {activePlan.price > 0 && activeSubscription?.end_date && (
+                      <button
+                        onClick={() => navigate('/abonnements')}
+                        className="px-6 py-2.5 bg-amber-600 text-white rounded-lg font-medium hover:bg-amber-700 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <i className="ri-refresh-line"></i>
+                        Payer le mois suivant
+                      </button>
+                    )}
+                    <button
+                      onClick={() => navigate('/abonnements')}
+                      className="px-6 py-2.5 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors flex items-center justify-center gap-2"
+                    >
+                      <i className="ri-arrow-right-circle-line"></i>
+                      Changer d'abonnement
+                    </button>
+                  </div>
                 </div>
-                <button
-                  onClick={() => navigate('/abonnements')}
-                  className="px-6 py-2.5 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors flex items-center gap-2"
-                >
-                  <i className="ri-arrow-right-circle-line"></i>
-                  Changer d'abonnement
-                </button>
+                {activePlan.price > 0 && activeSubscription?.end_date && (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                    <p className="text-sm text-amber-900">
+                      <i className="ri-time-line mr-2"></i>
+                      Votre abonnement expire le <strong>{formatDate(activeSubscription.end_date)}</strong>.
+                      Payer le mois suivant pour continuer sans interruption.
+                    </p>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
