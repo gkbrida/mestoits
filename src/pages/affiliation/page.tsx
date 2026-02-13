@@ -33,8 +33,10 @@ export default function AffiliationPage() {
   const [settings, setSettings] = useState<AffiliationSettings | null>(null);
   const [revenues, setRevenues] = useState<AffiliationRevenueRow[]>([]);
   const [loadingRevenues, setLoadingRevenues] = useState(false);
-  const [filterYear, setFilterYear] = useState<number | null>(null);
-  const [filterMonth, setFilterMonth] = useState<number | null>(null);
+  const [revenueError, setRevenueError] = useState<string | null>(null);
+  const now = new Date();
+  const [filterYear, setFilterYear] = useState<number | null>(now.getFullYear());
+  const [filterMonth, setFilterMonth] = useState<number | null>(now.getMonth() + 1);
 
   useEffect(() => {
     checkAuth();
@@ -62,6 +64,7 @@ export default function AffiliationPage() {
   const loadRevenues = async () => {
     if (!userId) return;
     setLoadingRevenues(true);
+    setRevenueError(null);
     try {
       const y = filterYear != null ? filterYear : undefined;
       const m = (filterYear != null && filterMonth != null) ? filterMonth : undefined;
@@ -69,6 +72,7 @@ export default function AffiliationPage() {
       setRevenues(data);
     } catch (e) {
       console.error(e);
+      setRevenueError('Erreur lors du chargement des revenus. Vérifiez la console.');
     } finally {
       setLoadingRevenues(false);
     }
@@ -195,8 +199,7 @@ export default function AffiliationPage() {
               <div className="mt-4 p-4 bg-teal-50 border border-teal-200 rounded-lg inline-block">
                 <p className="text-sm text-teal-800">
                   <i className="ri-percent-line mr-2"></i>
-                  Vous gagnez <strong>{settings.percentage}%</strong> sur les revenus de vos affiliés
-                  (abonnements, commissions réservations, loyers, paiements échelonnés) pendant{' '}
+                  Vous gagnez <strong>{settings.percentage}%</strong> sur les revenus de vos affiliés pendant{' '}
                   <strong>{settings.durationMonths} mois</strong> après leur inscription.
                 </p>
               </div>
@@ -308,6 +311,12 @@ export default function AffiliationPage() {
               )}
             </div>
 
+            {revenueError && (
+              <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm">
+                <i className="ri-error-warning-line mr-2"></i>
+                {revenueError}
+              </div>
+            )}
             {loadingRevenues ? (
               <div className="text-center py-12">
                 <i className="ri-loader-4-line text-3xl text-teal-600 animate-spin"></i>
@@ -328,9 +337,7 @@ export default function AffiliationPage() {
                     <tr className="border-b border-gray-200 text-left">
                       <th className="py-3 font-semibold text-gray-700">Affilié</th>
                       <th className="py-3 font-semibold text-gray-700">Mois</th>
-                      <th className="py-3 font-semibold text-gray-700 text-right">Abonnements</th>
-                      <th className="py-3 font-semibold text-gray-700 text-right">Commissions</th>
-                      <th className="py-3 font-semibold text-gray-700 text-right">Total</th>
+                      <th className="py-3 font-semibold text-gray-700 text-right">Revenus</th>
                       <th className="py-3 font-semibold text-gray-700 text-right">Votre part</th>
                     </tr>
                   </thead>
@@ -344,8 +351,6 @@ export default function AffiliationPage() {
                           </p>
                         </td>
                         <td className="py-3 text-gray-600">{formatMonth(r.year_month)}</td>
-                        <td className="py-3 text-right">{formatPrice(r.subscription_revenue)} F</td>
-                        <td className="py-3 text-right">{formatPrice(r.commission_revenue)} F</td>
                         <td className="py-3 text-right font-medium">{formatPrice(r.total_revenue)} F</td>
                         <td className="py-3 text-right text-teal-600 font-semibold">
                           {formatPrice(r.affiliate_earnings)} F ({r.affiliate_percentage}%)

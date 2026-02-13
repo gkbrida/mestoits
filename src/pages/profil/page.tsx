@@ -9,12 +9,22 @@ import PersonalInfoTab from './components/PersonalInfoTab';
 import ProfessionalTab from './components/ProfessionalTab';
 import SecurityTab from './components/SecurityTab';
 import WalletTab from './components/WalletTab';
+import PartnershipSignatureView from './components/PartnershipSignatureView';
+import { getAffiliationSettings } from '../../utils/affiliationUtils';
 export default function ProfilPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'personal' | 'professional' | 'security' | 'wallet'>('personal');
+  const [isPartner, setIsPartner] = useState(false);
+  const [showPartnershipSignature, setShowPartnershipSignature] = useState(false);
+  const [partnershipData, setPartnershipData] = useState<{
+    email: string;
+    userName: string;
+    percentage: number;
+    durationMonths: number;
+  } | null>(null);
 
   useEffect(() => {
     checkAuth();
@@ -34,6 +44,30 @@ export default function ProfilPage() {
       if (!user) {
         navigate('/connexion');
         return;
+      }
+      // Vérifier si l'utilisateur a signé un contrat de partenariat
+      const { data: contract } = await supabase
+        .from('partnership_contracts')
+        .select('signed_at')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      setIsPartner(!!contract?.signed_at);
+
+      // Charger profil pour le formulaire de signature (email, nom)
+      const { data: profile } = await supabase
+        .from('users_2025_12_01_11_29')
+        .select('email, full_name')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profile) {
+        const settings = await getAffiliationSettings(user.id);
+        setPartnershipData({
+          email: profile.email || user.email || '',
+          userName: profile.full_name || 'Partenaire',
+          percentage: settings.percentage || 10,
+          durationMonths: settings.durationMonths || 12,
+        });
       }
     } catch (error) {
       console.error('Erreur vérification auth:', error);
@@ -126,26 +160,44 @@ export default function ProfilPage() {
             </div>
           </div>
 
-          {/* Bouton Devenir partenaire */}
+          {/* Programme d'affiliation */}
           <div className="mt-6 bg-gradient-to-r from-teal-500 to-teal-600 rounded-xl md:rounded-2xl shadow-sm border border-teal-600 p-6 md:p-8">
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-              <div className="flex-1">
-                <h3 className="text-xl font-bold text-white mb-2">
-                  <i className="ri-gift-line mr-2"></i>
-                  Programme d'affiliation
-                </h3>
-                <p className="text-teal-50 text-sm sm:text-base">
-                  Partagez votre code d'affiliation et gagnez des avantages en invitant vos contacts à rejoindre la plateforme.
-                </p>
+            {showPartnershipSignature && partnershipData ? (
+              <PartnershipSignatureView
+                userEmail={partnershipData.email}
+                userName={partnershipData.userName}
+                percentage={partnershipData.percentage}
+                durationMonths={partnershipData.durationMonths}
+                onComplete={() => {
+                  setShowPartnershipSignature(false);
+                  setIsPartner(true);
+                }}
+                onCancel={() => setShowPartnershipSignature(false)}
+              />
+            ) : (
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="flex-1">
+                  <h3 className="text-xl font-bold text-white mb-2">
+                    <i className="ri-gift-line mr-2"></i>
+                    Programme d'affiliation
+                  </h3>
+                  <p className="text-teal-50 text-sm sm:text-base">
+                    {isPartner
+                      ? 'Accédez à votre espace partenaire pour consulter vos affiliés et revenus.'
+                      : 'Partagez votre code d\'affiliation et gagnez en invitant vos contacts. Signez le contrat de partenariat pour commencer.'}
+                  </p>
+                </div>
+                <button
+                  onClick={() =>
+                    isPartner ? navigate('/affiliation') : setShowPartnershipSignature(true)
+                  }
+                  className="px-6 py-3 bg-white text-teal-600 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap flex items-center gap-2"
+                >
+                  <i className="ri-arrow-right-line"></i>
+                  {isPartner ? 'Mon espace partenaire' : 'Devenir partenaire'}
+                </button>
               </div>
-              <button
-                onClick={() => navigate('/affiliation')}
-                className="px-6 py-3 bg-white text-teal-600 rounded-lg font-semibold hover:bg-gray-50 transition-colors whitespace-nowrap flex items-center gap-2"
-              >
-                <i className="ri-arrow-right-line"></i>
-                Devenir partenaire
-              </button>
-            </div>
+            )}
           </div>
         </div>
       </main>

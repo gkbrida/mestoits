@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { getCommissionRate, calculateCommission } from '../../../utils/commissionUtils';
+import { getAffiliationRevenuesByAffiliate } from '../../../utils/affiliationUtils';
 
 const FRAIS_TRANSACTION_POURCENT = 1.5; // Estimation frais Stripe/PayDunya
 
-export type WalletEntryType = 'reservation' | 'loyer' | 'echelon' | 'virement_auto' | 'encaissement_manuel';
+export type WalletEntryType = 'reservation' | 'loyer' | 'echelon' | 'virement_auto' | 'encaissement_manuel' | 'affiliation';
 
 export interface WalletEntry {
   id: string;
@@ -209,6 +210,28 @@ export default function WalletTab() {
         });
       } catch (_) {
         // Table non créée
+      }
+
+      // 5. Revenus d'affiliation
+      try {
+        const affiliationRevenues = await getAffiliationRevenuesByAffiliate(user.id);
+        affiliationRevenues.forEach((r) => {
+          const [y, m] = r.year_month.split('-').map(Number);
+          const dateStr = `${y}-${String(m).padStart(2, '0')}-01T12:00:00Z`;
+          allEntries.push({
+            id: `aff-${r.affiliate_id}-${r.year_month}`,
+            type: 'affiliation',
+            label: `Affiliation – ${r.affiliate_name} (${new Date(y, m - 1).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric' })})`,
+            date: dateStr,
+            amountBrut: 0,
+            commissionRate: 0,
+            commissionAmount: 0,
+            fraisTransaction: 0,
+            amountNet: r.affiliate_earnings,
+          });
+        });
+      } catch (_) {
+        // RPC ou table non disponibles
       }
 
       allEntries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -508,30 +531,30 @@ export default function WalletTab() {
                           <th className="text-left p-3 font-semibold text-gray-700">Type</th>
                           <th className="text-left p-3 font-semibold text-gray-700">Date</th>
                           <th className="text-right p-3 font-semibold text-gray-700">Brut</th>
-                          <th className="text-right p-3 font-semibold text-gray-700">Commission</th>
-                          <th className="text-right p-3 font-semibold text-gray-700">Frais</th>
+                          <th className="text-right p-3 font-semibold text-gray-700">Frais de services</th>
                           <th className="text-right p-3 font-semibold text-gray-700">Net</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {pageEntries.map((e) => (
-                          <tr key={e.id + e.type} className="border-b border-gray-100 hover:bg-gray-50">
-                            <td className="p-3 text-gray-900">{e.label}</td>
-                            <td className="p-3 text-gray-600">{formatDate(e.date)}</td>
-                            <td className="p-3 text-right font-medium">
-                              {e.isWithdrawal ? '—' : formatPrice(e.amountBrut)}
-                            </td>
-                            <td className="p-3 text-right text-amber-700">
-                              {e.isWithdrawal ? '—' : `-${formatPrice(e.commissionAmount)}`}
-                            </td>
-                            <td className="p-3 text-right text-gray-600">
-                              {e.isWithdrawal ? '—' : `-${formatPrice(e.fraisTransaction)}`}
-                            </td>
-                            <td className={`p-3 text-right font-semibold ${e.amountNet >= 0 ? 'text-teal-700' : 'text-red-600'}`}>
-                              {e.amountNet >= 0 ? formatPrice(e.amountNet) : `-${formatPrice(-e.amountNet)}`}
-                            </td>
-                          </tr>
-                        ))}
+                        {pageEntries.map((e) => {
+                          const fraisServices = e.commissionAmount + e.fraisTransaction;
+                          const showFrais = !e.isWithdrawal && e.type !== 'affiliation';
+                          return (
+                            <tr key={e.id + e.type} className="border-b border-gray-100 hover:bg-gray-50">
+                              <td className="p-3 text-gray-900">{e.label}</td>
+                              <td className="p-3 text-gray-600">{formatDate(e.date)}</td>
+                              <td className="p-3 text-right font-medium">
+                                {e.isWithdrawal || e.type === 'affiliation' ? '—' : formatPrice(e.amountBrut)}
+                              </td>
+                              <td className="p-3 text-right text-amber-700">
+                                {showFrais ? `-${formatPrice(fraisServices)}` : '—'}
+                              </td>
+                              <td className={`p-3 text-right font-semibold ${e.amountNet >= 0 ? 'text-teal-700' : 'text-red-600'}`}>
+                                {e.amountNet >= 0 ? formatPrice(e.amountNet) : `-${formatPrice(-e.amountNet)}`}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -546,19 +569,15 @@ export default function WalletTab() {
                           </span>
                         </div>
                         <span className="text-gray-500 text-xs">{formatDate(e.date)}</span>
-                        {!e.isWithdrawal && (
+                        {!e.isWithdrawal && e.type !== 'affiliation' && (
                           <div className="text-sm space-y-1 mt-2 pt-2 border-t">
                             <div className="flex justify-between">
                               <span className="text-gray-600">Brut</span>
                               <span>{formatPrice(e.amountBrut)}</span>
                             </div>
                             <div className="flex justify-between text-amber-700">
-                              <span>Commission</span>
-                              <span>-{formatPrice(e.commissionAmount)}</span>
-                            </div>
-                            <div className="flex justify-between text-gray-600">
-                              <span>Frais</span>
-                              <span>-{formatPrice(e.fraisTransaction)}</span>
+                              <span>Frais de services ({e.commissionRate}%)</span>
+                              <span>-{formatPrice(e.commissionAmount + e.fraisTransaction)}</span>
                             </div>
                           </div>
                         )}

@@ -33,11 +33,12 @@ DECLARE
     cust_duration INTEGER;
     cust_pct DECIMAL(5, 2);
 BEGIN
-    SELECT COALESCE((value::text)::integer, 12) INTO def_duration
+    -- value#>>'{}' extrait le scalaire JSONB en texte (gère nombre et chaîne)
+    SELECT COALESCE(NULLIF(TRIM(value#>>'{}'), '')::integer, 12) INTO def_duration
     FROM platform_settings WHERE key = 'affiliation_default_duration_months' LIMIT 1;
     IF def_duration IS NULL THEN def_duration := 12; END IF;
 
-    SELECT COALESCE((value::text)::decimal, 10) INTO def_pct
+    SELECT COALESCE(NULLIF(TRIM(value#>>'{}'), '')::decimal, 10) INTO def_pct
     FROM platform_settings WHERE key = 'affiliation_default_percentage' LIMIT 1;
     IF def_pct IS NULL THEN def_pct := 10; END IF;
 
@@ -146,8 +147,8 @@ BEGIN
               AND u.created_at::date <= ym_end
               AND (u.created_at::date + (dur || ' months')::interval)::date >= ym_start
         LOOP
-            SELECT sr, cr INTO sub_rev, comm_rev
-            FROM get_affiliate_revenue_for_month(rec.id, year_val, month_val);
+            SELECT rev.subscription_revenue, rev.commission_revenue INTO sub_rev, comm_rev
+            FROM get_affiliate_revenue_for_month(rec.id, year_val, month_val) AS rev;
 
             IF sub_rev + comm_rev > 0 THEN
                 affiliate_id := rec.id;
@@ -181,8 +182,8 @@ BEGIN
                   AND u.created_at::date <= ym_end
                   AND (u.created_at::date + (dur || ' months')::interval)::date >= ym_start
             LOOP
-                SELECT sr, cr INTO sub_rev, comm_rev
-                FROM get_affiliate_revenue_for_month(rec.id, series_rec.y, series_rec.m);
+                SELECT rev.subscription_revenue, rev.commission_revenue INTO sub_rev, comm_rev
+                FROM get_affiliate_revenue_for_month(rec.id, series_rec.y, series_rec.m) AS rev;
 
                 IF sub_rev + comm_rev > 0 THEN
                     affiliate_id := rec.id;
@@ -202,7 +203,12 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS update_user_affiliation_settings_updated_at ON user_affiliation_settings;
 CREATE TRIGGER update_user_affiliation_settings_updated_at
     BEFORE UPDATE ON user_affiliation_settings
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+-- Permissions pour que les utilisateurs connectés puissent appeler les RPC
+GRANT EXECUTE ON FUNCTION get_affiliation_effective_settings(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_affiliation_revenues_by_affiliate(UUID, INTEGER, INTEGER) TO authenticated;

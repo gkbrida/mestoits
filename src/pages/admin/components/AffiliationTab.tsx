@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { useAdminAuth } from '../../../contexts/AdminAuthContext';
 
 interface DefaultSettings {
   durationMonths: number;
@@ -15,14 +16,35 @@ interface UserAffiliationSetting {
   percentage: number | null;
 }
 
+interface PartnerStats {
+  partner_id: string;
+  partner_name: string;
+  partner_email: string;
+  nb_affiliates: number;
+  total_commissions: number;
+  total_platform_revenue: number;
+}
+
+interface AffiliationTotals {
+  total_partners: number;
+  total_affiliates: number;
+  total_commissions: number;
+  total_platform_revenue: number;
+}
+
+const getApiUrl = () => (import.meta.env.DEV ? '/api' : (import.meta.env.VITE_EMAIL_API_URL || '/api'));
+
 export default function AffiliationTab() {
+  const { admin } = useAdminAuth();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [defaults, setDefaults] = useState<DefaultSettings>({ durationMonths: 12, percentage: 10 });
   const [userSettings, setUserSettings] = useState<UserAffiliationSetting[]>([]);
   const [searchUserId, setSearchUserId] = useState('');
-  const [searchResult, setSearchResult] = useState<{ id: string; email: string; full_name: string } | null>(null);
+  const [searchResults, setSearchResults] = useState<{ id: string; email: string; full_name: string }[]>([]);
   const [addingUser, setAddingUser] = useState(false);
+  const [partnersStats, setPartnersStats] = useState<PartnerStats[]>([]);
+  const [affiliationTotals, setAffiliationTotals] = useState<AffiliationTotals | null>(null);
 
   useEffect(() => {
     load();
@@ -78,6 +100,22 @@ export default function AffiliationTab() {
         };
       });
       setUserSettings(items);
+
+      if (admin?.email) {
+        try {
+          const statsRes = await fetch(
+            `${getApiUrl()}/admin/affiliation-settings?action=partners-stats`,
+            { headers: { 'X-Admin-Email': admin.email } }
+          );
+          const statsJson = await statsRes.json();
+          if (statsJson.success) {
+            setPartnersStats(statsJson.partners || []);
+            setAffiliationTotals(statsJson.totals || null);
+          }
+        } catch (statsErr) {
+          console.error('Erreur stats partenaires:', statsErr);
+        }
+      }
     } catch (e) {
       console.error(e);
       alert('Erreur lors du chargement');
@@ -96,7 +134,7 @@ export default function AffiliationTab() {
         const { error } = await supabase
           .from('platform_settings')
           .upsert(
-            { key, value: value.toString(), updated_at: new Date().toISOString() },
+            { key, value: typeof value === 'number' ? value : Number(value) || 0, updated_at: new Date().toISOString() },
             { onConflict: 'key' }
           );
         if (error) throw error;
@@ -111,36 +149,59 @@ export default function AffiliationTab() {
   };
 
   const searchUser = async () => {
-    if (!searchUserId.trim()) return;
-    const { data } = await supabase
-      .from('users_2025_12_01_11_29')
-      .select('id, email, full_name')
-      .or(`id.eq.${searchUserId.trim()},email.ilike.%${searchUserId.trim()}%`)
-      .limit(1)
-      .maybeSingle();
-    setSearchResult(data || null);
+    if (!searchUserId.trim() || !admin?.email) return;
+    try {
+      const res = await fetch(
+        `${getApiUrl()}/admin/affiliation-settings?action=search&query=${encodeURIComponent(searchUserId.trim())}`,
+        { headers: { 'X-Admin-Email': admin.email } }
+      );
+      const json = await res.json();
+      if (!json.success || !json.users?.length) {
+        setSearchResults([]);
+        return;
+      }
+      setSearchResults(json.users.map((u: { id: string; email?: string; full_name?: string }) => ({
+        id: u.id,
+        email: u.email || '—',
+        full_name: u.full_name || '—'
+      })));
+    } catch (e) {
+      console.error(e);
+      setSearchResults([]);
+    }
   };
 
-  const addUserSetting = async () => {
-    if (!searchResult) return;
-    const exists = userSettings.some((s) => s.user_id === searchResult.id);
+  const addUserSetting = async (user: { id: string; email: string; full_name: string }) => {
+    if (!admin?.email) return;
+    const exists = userSettings.some((s) => s.user_id === user.id);
     if (exists) {
       alert('Ce client a déjà des paramètres spécifiques');
       return;
     }
-    const { error } = await supabase.from('user_affiliation_settings').insert({
-      user_id: searchResult.id,
-      duration_months: defaults.durationMonths,
-      percentage: defaults.percentage,
-    });
-    if (error) {
-      alert('Erreur: ' + error.message);
-      return;
+    try {
+      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
+        body: JSON.stringify({
+          action: 'add',
+          user_id: user.id,
+          duration_months: defaults.durationMonths,
+          percentage: defaults.percentage,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        alert('Erreur: ' + (json.error || 'Échec de l\'ajout'));
+        return;
+      }
+      setSearchUserId('');
+      setSearchResults([]);
+      setAddingUser(false);
+      load();
+    } catch (e) {
+      console.error(e);
+      alert('Erreur lors de l\'ajout du client');
     }
-    setSearchUserId('');
-    setSearchResult(null);
-    setAddingUser(false);
-    load();
   };
 
   const updateUserSetting = async (
@@ -148,19 +209,37 @@ export default function AffiliationTab() {
     field: 'duration_months' | 'percentage',
     value: number | null
   ) => {
-    const { error } = await supabase
-      .from('user_affiliation_settings')
-      .update({ [field]: value, updated_at: new Date().toISOString() })
-      .eq('id', id);
-    if (error) alert('Erreur: ' + error.message);
-    else load();
+    if (!admin?.email) return;
+    try {
+      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
+        body: JSON.stringify({ action: 'update', id, [field]: value }),
+      });
+      const json = await res.json();
+      if (!json.success) alert('Erreur: ' + (json.error || 'Échec de la mise à jour'));
+      else load();
+    } catch (e) {
+      console.error(e);
+      alert('Erreur lors de la mise à jour');
+    }
   };
 
   const removeUserSetting = async (id: string) => {
-    if (!confirm('Supprimer les paramètres spécifiques pour ce client ?')) return;
-    const { error } = await supabase.from('user_affiliation_settings').delete().eq('id', id);
-    if (error) alert('Erreur: ' + error.message);
-    else load();
+    if (!confirm('Supprimer les paramètres spécifiques pour ce client ?') || !admin?.email) return;
+    try {
+      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
+        body: JSON.stringify({ action: 'remove', id }),
+      });
+      const json = await res.json();
+      if (!json.success) alert('Erreur: ' + (json.error || 'Échec de la suppression'));
+      else load();
+    } catch (e) {
+      console.error(e);
+      alert('Erreur lors de la suppression');
+    }
   };
 
   if (loading) {
@@ -172,6 +251,8 @@ export default function AffiliationTab() {
     );
   }
 
+  const formatPrice = (n: number) => (n ?? 0).toLocaleString('fr-FR', { maximumFractionDigits: 0 });
+
   return (
     <div className="space-y-8">
       <div>
@@ -180,6 +261,57 @@ export default function AffiliationTab() {
           Configurez la durée et le pourcentage d'affiliation. Les valeurs par défaut s'appliquent aux clients sans
           paramètres spécifiques.
         </p>
+      </div>
+
+      {/* Statistiques partenaires et totaux */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-900 mb-4">Partenaires et statistiques</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+            <div className="bg-teal-50 rounded-lg p-4 border border-teal-100">
+              <p className="text-sm text-teal-700 font-medium">Partenaires</p>
+              <p className="text-2xl font-bold text-teal-900">{affiliationTotals?.total_partners ?? 0}</p>
+            </div>
+            <div className="bg-blue-50 rounded-lg p-4 border border-blue-100">
+              <p className="text-sm text-blue-700 font-medium">Clients affiliés</p>
+              <p className="text-2xl font-bold text-blue-900">{affiliationTotals?.total_affiliates ?? 0}</p>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-4 border border-amber-100">
+              <p className="text-sm text-amber-700 font-medium">Commissions versées</p>
+              <p className="text-2xl font-bold text-amber-900">{formatPrice(affiliationTotals?.total_commissions ?? 0)} F</p>
+            </div>
+            <div className="bg-green-50 rounded-lg p-4 border border-green-100">
+              <p className="text-sm text-green-700 font-medium">Revenus plateforme (affiliés)</p>
+              <p className="text-2xl font-bold text-green-900">{formatPrice(affiliationTotals?.total_platform_revenue ?? 0)} F</p>
+            </div>
+          </div>
+        {partnersStats.length === 0 ? (
+          <p className="text-gray-500 py-4">Aucun partenaire ayant signé le contrat pour le moment.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 text-left">
+                  <th className="py-3 font-semibold text-gray-700">Partenaire</th>
+                  <th className="py-3 font-semibold text-gray-700">Email</th>
+                  <th className="py-3 font-semibold text-gray-700 text-right">Nb affiliés</th>
+                  <th className="py-3 font-semibold text-gray-700 text-right">Commissions versées</th>
+                  <th className="py-3 font-semibold text-gray-700 text-right">Revenus plateforme</th>
+                </tr>
+              </thead>
+              <tbody>
+                {partnersStats.map((p) => (
+                  <tr key={p.partner_id} className="border-b border-gray-100">
+                    <td className="py-3 font-medium">{p.partner_name}</td>
+                    <td className="py-3 text-gray-600">{p.partner_email}</td>
+                    <td className="py-3 text-right">{p.nb_affiliates}</td>
+                    <td className="py-3 text-right text-teal-600 font-medium">{formatPrice(p.total_commissions)} F</td>
+                    <td className="py-3 text-right text-gray-600">{formatPrice(p.total_platform_revenue)} F</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Valeurs par défaut */}
@@ -243,7 +375,7 @@ export default function AffiliationTab() {
                 value={searchUserId}
                 onChange={(e) => {
                   setSearchUserId(e.target.value);
-                  setSearchResult(null);
+                  setSearchResults([]);
                 }}
                 placeholder="email@exemple.com ou UUID"
                 className="flex-1 rounded-lg border border-gray-300 px-4 py-2"
@@ -255,27 +387,31 @@ export default function AffiliationTab() {
                 Rechercher
               </button>
             </div>
-            {searchResult && (
-              <div className="mt-3 flex items-center justify-between p-3 bg-white rounded border">
-                <span>{searchResult.full_name || '—'} ({searchResult.email})</span>
-                <div className="flex gap-2">
-                  <button
-                    onClick={addUserSetting}
-                    className="px-3 py-1 bg-teal-600 text-white rounded text-sm"
-                  >
-                    Ajouter
-                  </button>
-                  <button
-                    onClick={() => {
-                      setSearchUserId('');
-                      setSearchResult(null);
-                      setAddingUser(false);
-                    }}
-                    className="px-3 py-1 bg-gray-200 rounded text-sm"
-                  >
-                    Annuler
-                  </button>
-                </div>
+            {searchResults.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {searchResults.map((u) => (
+                  <div key={u.id} className="flex items-center justify-between p-3 bg-white rounded border">
+                    <span>{u.full_name || '—'} ({u.email})</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => addUserSetting(u)}
+                        className="px-3 py-1 bg-teal-600 text-white rounded text-sm hover:bg-teal-700"
+                      >
+                        Ajouter
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  onClick={() => {
+                    setSearchUserId('');
+                    setSearchResults([]);
+                    setAddingUser(false);
+                  }}
+                  className="mt-2 px-3 py-1 bg-gray-200 rounded text-sm hover:bg-gray-300"
+                >
+                  Annuler
+                </button>
               </div>
             )}
           </div>
