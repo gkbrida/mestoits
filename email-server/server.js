@@ -38,7 +38,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Admin-Email'],
   exposedHeaders: ['Content-Length', 'Content-Type']
 }));
 app.use(express.json());
@@ -384,6 +384,107 @@ app.post("/admin/login", async (req, res) => {
   }
 });
 
+// Routes affiliation-settings (admin) - pour dev local (proxy Vite envoie /api/* ici)
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+app.get("/admin/affiliation-settings", async (req, res) => {
+  const adminEmail = req.headers['x-admin-email'];
+  if (!adminEmail) {
+    return res.status(401).json({ success: false, error: 'Session admin requise' });
+  }
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return res.status(500).json({ success: false, error: 'Config Supabase manquante' });
+    }
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { autoRefreshToken: false } });
+
+    const { data: admin } = await supabase.from('admins').select('id').eq('email', adminEmail).eq('is_active', true).single();
+    if (!admin) return res.status(401).json({ success: false, error: 'Admin non authentifié' });
+
+    const { action, query } = req.query;
+    if (action === 'search' && query) {
+      const trimmed = String(query).trim();
+      const isUuid = UUID_REGEX.test(trimmed);
+      const { data } = isUuid
+        ? await supabase.from('users_2025_12_01_11_29').select('id, email, full_name').eq('id', trimmed).limit(1)
+        : await supabase.from('users_2025_12_01_11_29').select('id, email, full_name').ilike('email', `%${trimmed}%`).limit(5);
+      return res.json({ success: true, users: data || [] });
+    }
+    if (action === 'list') {
+      const { data } = await supabase.from('user_affiliation_settings').select('id, user_id, duration_months, percentage');
+      return res.json({ success: true, settings: data || [] });
+    }
+    if (action === 'partners-stats') {
+      let partners = [];
+      let totals = { total_partners: 0, total_affiliates: 0, total_commissions: 0, total_platform_revenue: 0 };
+      const { data: partnersData, error: partnersError } = await supabase.rpc('get_admin_affiliation_partners_stats');
+      if (partnersError) {
+        console.warn('partners-stats (migration partnership_contracts peut être à exécuter):', partnersError.message);
+      } else {
+        partners = partnersData || [];
+      }
+      const { data: totalsData, error: totalsError } = await supabase.rpc('get_admin_affiliation_totals');
+      if (totalsError) {
+        console.warn('totals (migration partnership_contracts peut être à exécuter):', totalsError.message);
+      } else if (Array.isArray(totalsData) && totalsData[0]) {
+        totals = totalsData[0];
+      }
+      return res.json({ success: true, partners, totals });
+    }
+    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
+  } catch (e) {
+    console.error('affiliation-settings GET error:', e);
+    return res.status(500).json({ success: false, error: (e && e.message) || 'Erreur serveur' });
+  }
+});
+
+app.post("/admin/affiliation-settings", async (req, res) => {
+  const adminEmail = req.headers['x-admin-email'];
+  if (!adminEmail) {
+    return res.status(401).json({ success: false, error: 'Session admin requise' });
+  }
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return res.status(500).json({ success: false, error: 'Config Supabase manquante' });
+    }
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, { auth: { autoRefreshToken: false } });
+
+    const { data: admin } = await supabase.from('admins').select('id').eq('email', adminEmail).eq('is_active', true).single();
+    if (!admin) return res.status(401).json({ success: false, error: 'Admin non authentifié' });
+
+    const { action, user_id, duration_months, percentage, id } = req.body || {};
+    if (action === 'add' && user_id) {
+      const { error } = await supabase.from('user_affiliation_settings').upsert(
+        { user_id, duration_months: duration_months ?? null, percentage: percentage ?? null, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id' }
+      );
+      if (error) return res.status(400).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    }
+    if (action === 'update' && id !== undefined) {
+      const updates = { updated_at: new Date().toISOString() };
+      if (duration_months !== undefined) updates.duration_months = duration_months;
+      if (percentage !== undefined) updates.percentage = percentage;
+      const { error } = await supabase.from('user_affiliation_settings').update(updates).eq('id', id);
+      if (error) return res.status(400).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    }
+    if (action === 'remove' && id) {
+      const { error } = await supabase.from('user_affiliation_settings').delete().eq('id', id);
+      if (error) return res.status(400).json({ success: false, error: error.message });
+      return res.json({ success: true });
+    }
+    return res.status(400).json({ success: false, error: 'Paramètres invalides' });
+  } catch (e) {
+    console.error('affiliation-settings POST error:', e);
+    return res.status(500).json({ success: false, error: (e && e.message) || 'Erreur serveur' });
+  }
+});
+
 // Gestion des erreurs 404
 app.use((req, res) => {
   console.log(`⚠️ Route non trouvée: ${req.method} ${req.path}`);
@@ -394,7 +495,9 @@ app.use((req, res) => {
       'GET /health',
       'POST /send-email',
       'POST /create-payment-session',
-      'POST /admin/login'
+      'POST /admin/login',
+      'GET /admin/affiliation-settings',
+      'POST /admin/affiliation-settings'
     ]
   });
 });

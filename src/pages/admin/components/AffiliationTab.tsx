@@ -32,7 +32,8 @@ interface AffiliationTotals {
   total_platform_revenue: number;
 }
 
-const getApiUrl = () => (import.meta.env.DEV ? '/api' : (import.meta.env.VITE_EMAIL_API_URL || '/api'));
+// Toujours utiliser l'API du même domaine (Vercel/api ou proxy dev) - pas le serveur email
+const getAdminApiUrl = () => (typeof window !== 'undefined' ? window.location.origin : '') + '/api';
 
 export default function AffiliationTab() {
   const { admin } = useAdminAuth();
@@ -104,7 +105,7 @@ export default function AffiliationTab() {
       if (admin?.email) {
         try {
           const statsRes = await fetch(
-            `${getApiUrl()}/admin/affiliation-settings?action=partners-stats`,
+            `${getAdminApiUrl()}/admin/affiliation-settings?action=partners-stats`,
             { headers: { 'X-Admin-Email': admin.email } }
           );
           const statsJson = await statsRes.json();
@@ -152,7 +153,7 @@ export default function AffiliationTab() {
     if (!searchUserId.trim() || !admin?.email) return;
     try {
       const res = await fetch(
-        `${getApiUrl()}/admin/affiliation-settings?action=search&query=${encodeURIComponent(searchUserId.trim())}`,
+        `${getAdminApiUrl()}/admin/affiliation-settings?action=search&query=${encodeURIComponent(searchUserId.trim())}`,
         { headers: { 'X-Admin-Email': admin.email } }
       );
       const json = await res.json();
@@ -179,7 +180,7 @@ export default function AffiliationTab() {
       return;
     }
     try {
-      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+      const res = await fetch(`${getAdminApiUrl()}/admin/affiliation-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
         body: JSON.stringify({
@@ -211,7 +212,7 @@ export default function AffiliationTab() {
   ) => {
     if (!admin?.email) return;
     try {
-      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+      const res = await fetch(`${getAdminApiUrl()}/admin/affiliation-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
         body: JSON.stringify({ action: 'update', id, [field]: value }),
@@ -228,7 +229,7 @@ export default function AffiliationTab() {
   const removeUserSetting = async (id: string) => {
     if (!confirm('Supprimer les paramètres spécifiques pour ce client ?') || !admin?.email) return;
     try {
-      const res = await fetch(`${getApiUrl()}/admin/affiliation-settings`, {
+      const res = await fetch(`${getAdminApiUrl()}/admin/affiliation-settings`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Admin-Email': admin.email },
         body: JSON.stringify({ action: 'remove', id }),

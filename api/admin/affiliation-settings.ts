@@ -48,25 +48,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ success: true, settings: data || [] });
       }
       if (action === 'partners-stats') {
-        const { data: partners, error: partnersError } = await supabase.rpc('get_admin_affiliation_partners_stats');
+        let partners: unknown[] = [];
+        let totals: { total_partners: number; total_affiliates: number; total_commissions: number; total_platform_revenue: number } = {
+          total_partners: 0, total_affiliates: 0, total_commissions: 0, total_platform_revenue: 0,
+        };
+        const { data: partnersData, error: partnersError } = await supabase.rpc('get_admin_affiliation_partners_stats');
         if (partnersError) {
-          return res.status(500).json({ success: false, error: partnersError.message });
+          console.warn('partners-stats (exécuter migration-create-partnership-contracts.sql):', partnersError.message);
+        } else {
+          partners = partnersData || [];
         }
         const { data: totalsData, error: totalsError } = await supabase.rpc('get_admin_affiliation_totals');
         if (totalsError) {
-          return res.status(500).json({ success: false, error: totalsError.message });
+          console.warn('totals (exécuter migration-create-partnership-contracts.sql):', totalsError.message);
+        } else if (Array.isArray(totalsData) && totalsData[0]) {
+          totals = totalsData[0] as typeof totals;
         }
-        const totals = Array.isArray(totalsData) && totalsData[0] ? totalsData[0] : null;
-        return res.status(200).json({
-          success: true,
-          partners: partners || [],
-          totals: totals || {
-            total_partners: 0,
-            total_affiliates: 0,
-            total_commissions: 0,
-            total_platform_revenue: 0,
-          },
-        });
+        return res.status(200).json({ success: true, partners, totals });
       }
     }
 
