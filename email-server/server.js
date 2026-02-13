@@ -420,16 +420,68 @@ app.get("/admin/affiliation-settings", async (req, res) => {
       let partners = [];
       let totals = { total_partners: 0, total_affiliates: 0, total_commissions: 0, total_platform_revenue: 0 };
       const { data: partnersData, error: partnersError } = await supabase.rpc('get_admin_affiliation_partners_stats');
-      if (partnersError) {
-        console.warn('partners-stats (migration partnership_contracts peut être à exécuter):', partnersError.message);
+      const { data: totalsData, error: totalsError } = await supabase.rpc('get_admin_affiliation_totals');
+
+      if (partnersError || totalsError) {
+        try {
+          console.warn('RPC échoué, fallback direct:', partnersError?.message || totalsError?.message);
+          const { data: signedContracts } = await supabase.from('partnership_contracts').select('user_id').not('signed_at', 'is', null);
+          const partnerIds = (signedContracts || []).map((r) => r.user_id);
+          if (partnerIds.length > 0) {
+            const { count: affiliatesCount } = await supabase.from('users_2025_12_01_11_29').select('*', { count: 'exact', head: true }).in('affiliated_by', partnerIds);
+            const { data: partnerUsers } = await supabase.from('users_2025_12_01_11_29').select('id, full_name, email').in('id', partnerIds);
+            let totalCommissions = 0;
+            let totalPlatformRevenue = 0;
+            for (const pid of partnerIds) {
+              const { data: rev } = await supabase.rpc('get_affiliation_revenues_by_affiliate', { referrer_uuid: pid, year_val: null, month_val: null });
+              if (Array.isArray(rev)) {
+                for (const row of rev) {
+                  totalCommissions += Number(row?.affiliate_earnings ?? 0);
+                  totalPlatformRevenue += Number(row?.total_revenue ?? 0);
+                }
+              }
+            }
+            for (const u of partnerUsers || []) {
+              const { count: nbAff } = await supabase.from('users_2025_12_01_11_29').select('*', { count: 'exact', head: true }).eq('affiliated_by', u.id);
+              const { data: rev } = await supabase.rpc('get_affiliation_revenues_by_affiliate', { referrer_uuid: u.id, year_val: null, month_val: null });
+              let tcomm = 0;
+              let trev = 0;
+              if (Array.isArray(rev)) {
+                for (const row of rev) {
+                  tcomm += Number(row?.affiliate_earnings ?? 0);
+                  trev += Number(row?.total_revenue ?? 0);
+                }
+              }
+              partners.push({
+                partner_id: u.id,
+                partner_name: u.full_name || '—',
+                partner_email: u.email || '—',
+                nb_affiliates: nbAff ?? 0,
+                total_commissions: tcomm,
+                total_platform_revenue: trev,
+              });
+            }
+            totals = {
+              total_partners: partnerIds.length,
+              total_affiliates: affiliatesCount ?? 0,
+              total_commissions: totalCommissions,
+              total_platform_revenue: totalPlatformRevenue,
+            };
+          }
+        } catch (fbErr) {
+          console.error('Fallback partners-stats erreur:', fbErr);
+        }
       } else {
         partners = partnersData || [];
-      }
-      const { data: totalsData, error: totalsError } = await supabase.rpc('get_admin_affiliation_totals');
-      if (totalsError) {
-        console.warn('totals (migration partnership_contracts peut être à exécuter):', totalsError.message);
-      } else if (Array.isArray(totalsData) && totalsData[0]) {
-        totals = totalsData[0];
+        if (Array.isArray(totalsData) && totalsData[0]) {
+          const t = totalsData[0];
+          totals = {
+            total_partners: Number(t?.total_partners ?? 0),
+            total_affiliates: Number(t?.total_affiliates ?? 0),
+            total_commissions: Number(t?.total_commissions ?? 0),
+            total_platform_revenue: Number(t?.total_platform_revenue ?? 0),
+          };
+        }
       }
       return res.json({ success: true, partners, totals });
     }

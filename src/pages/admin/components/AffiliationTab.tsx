@@ -46,6 +46,8 @@ export default function AffiliationTab() {
   const [addingUser, setAddingUser] = useState(false);
   const [partnersStats, setPartnersStats] = useState<PartnerStats[]>([]);
   const [affiliationTotals, setAffiliationTotals] = useState<AffiliationTotals | null>(null);
+  const [partnersPage, setPartnersPage] = useState(1);
+  const PARTNERS_PER_PAGE = 10;
 
   useEffect(() => {
     load();
@@ -110,8 +112,24 @@ export default function AffiliationTab() {
           );
           const statsJson = await statsRes.json();
           if (statsJson.success) {
-            setPartnersStats(statsJson.partners || []);
-            setAffiliationTotals(statsJson.totals || null);
+            const rawPartners = statsJson.partners || [];
+            const normalized = Array.isArray(rawPartners) ? rawPartners.map((p: Record<string, unknown>) => ({
+              partner_id: p.partner_id ?? p.partnerId ?? '',
+              partner_name: p.partner_name ?? p.partnerName ?? '—',
+              partner_email: p.partner_email ?? p.partnerEmail ?? '—',
+              nb_affiliates: Number(p.nb_affiliates ?? p.nbAffiliates ?? 0),
+              total_commissions: Number(p.total_commissions ?? p.totalCommissions ?? 0),
+              total_platform_revenue: Number(p.total_platform_revenue ?? p.totalPlatformRevenue ?? 0),
+            })) : [];
+            setPartnersStats(normalized);
+            setPartnersPage(1);
+            const t = statsJson.totals;
+            setAffiliationTotals(t ? {
+              total_partners: Number(t.total_partners ?? t.totalPartners ?? 0),
+              total_affiliates: Number(t.total_affiliates ?? t.totalAffiliates ?? 0),
+              total_commissions: Number(t.total_commissions ?? t.totalCommissions ?? 0),
+              total_platform_revenue: Number(t.total_platform_revenue ?? t.totalPlatformRevenue ?? 0),
+            } : null);
           }
         } catch (statsErr) {
           console.error('Erreur stats partenaires:', statsErr);
@@ -288,30 +306,57 @@ export default function AffiliationTab() {
         {partnersStats.length === 0 ? (
           <p className="text-gray-500 py-4">Aucun partenaire ayant signé le contrat pour le moment.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left">
-                  <th className="py-3 font-semibold text-gray-700">Partenaire</th>
-                  <th className="py-3 font-semibold text-gray-700">Email</th>
-                  <th className="py-3 font-semibold text-gray-700 text-right">Nb affiliés</th>
-                  <th className="py-3 font-semibold text-gray-700 text-right">Commissions versées</th>
-                  <th className="py-3 font-semibold text-gray-700 text-right">Revenus plateforme</th>
-                </tr>
-              </thead>
-              <tbody>
-                {partnersStats.map((p) => (
-                  <tr key={p.partner_id} className="border-b border-gray-100">
-                    <td className="py-3 font-medium">{p.partner_name}</td>
-                    <td className="py-3 text-gray-600">{p.partner_email}</td>
-                    <td className="py-3 text-right">{p.nb_affiliates}</td>
-                    <td className="py-3 text-right text-teal-600 font-medium">{formatPrice(p.total_commissions)} F</td>
-                    <td className="py-3 text-right text-gray-600">{formatPrice(p.total_platform_revenue)} F</td>
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-left">
+                    <th className="py-3 font-semibold text-gray-700">Partenaire</th>
+                    <th className="py-3 font-semibold text-gray-700">Email</th>
+                    <th className="py-3 font-semibold text-gray-700 text-right">Nb affiliés</th>
+                    <th className="py-3 font-semibold text-gray-700 text-right">Commissions versées</th>
+                    <th className="py-3 font-semibold text-gray-700 text-right">Revenus plateforme</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {partnersStats
+                    .slice((partnersPage - 1) * PARTNERS_PER_PAGE, partnersPage * PARTNERS_PER_PAGE)
+                    .map((p) => (
+                      <tr key={p.partner_id} className="border-b border-gray-100">
+                        <td className="py-3 font-medium">{p.partner_name}</td>
+                        <td className="py-3 text-gray-600">{p.partner_email}</td>
+                        <td className="py-3 text-right">{p.nb_affiliates}</td>
+                        <td className="py-3 text-right text-teal-600 font-medium">{formatPrice(p.total_commissions)} F</td>
+                        <td className="py-3 text-right text-gray-600">{formatPrice(p.total_platform_revenue)} F</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+            {partnersStats.length > PARTNERS_PER_PAGE && (
+              <div className="mt-4 flex items-center justify-between">
+                <p className="text-sm text-gray-600">
+                  Page {partnersPage} sur {Math.ceil(partnersStats.length / PARTNERS_PER_PAGE)} ({partnersStats.length} partenaire{partnersStats.length > 1 ? 's' : ''})
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setPartnersPage((p) => Math.max(1, p - 1))}
+                    disabled={partnersPage <= 1}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                  >
+                    Précédent
+                  </button>
+                  <button
+                    onClick={() => setPartnersPage((p) => Math.min(Math.ceil(partnersStats.length / PARTNERS_PER_PAGE), p + 1))}
+                    disabled={partnersPage >= Math.ceil(partnersStats.length / PARTNERS_PER_PAGE)}
+                    className="px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                  >
+                    Suivant
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
