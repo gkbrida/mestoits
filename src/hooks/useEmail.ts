@@ -49,7 +49,9 @@ type EmailType =
   | 'document_professionnel_ajoute'
   | 'document_professionnel_valide'
   | 'document_professionnel_rejete'
-  | 'professionnel_certifie';
+  | 'professionnel_certifie'
+  | 'arrival_reminder'
+  | 'arrival_signaled';
 
 interface EmailResponse {
   success: boolean;
@@ -334,6 +336,10 @@ function buildEmailPayload(
       return buildBailFinProcheEmail(data);
     case 'bail_reconduit':
       return buildBailReconduitEmail(data);
+    case 'arrival_reminder':
+      return buildArrivalReminderEmail(data);
+    case 'arrival_signaled':
+      return buildArrivalSignaledEmail(data);
     default:
       console.warn(`Type d'email non implémenté: ${type}`);
       return null;
@@ -1900,6 +1906,162 @@ Cet email a été envoyé depuis la plateforme Mestoits`;
   return {
     to: receiverEmail,
     subject: `Nouveau contact pour votre bien: ${propertyTitle} - Mestoits`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Rappel au locataire de signaler son arrivée (réservation débutée)
+ */
+function buildArrivalReminderEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const guestEmail = data.guestEmail as string;
+  const guestName = data.guestName as string;
+  const propertyTitle = data.propertyTitle as string;
+  const appUrl = (data.appUrl as string) || 'https://mestoits.com';
+
+  if (!guestEmail || !propertyTitle) {
+    console.error('Données manquantes pour l\'email arrival_reminder');
+    return null;
+  }
+
+  const mesReservationsUrl = `${appUrl}/mes-reservations`;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; padding: 12px 24px; background: #0d9488; color: white; text-decoration: none; border-radius: 8px; margin: 16px 0; font-weight: 600; }
+    .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0;">🏠 Votre réservation a débuté</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour ${guestName || 'Client'},</p>
+      <p>Votre réservation pour <strong>${propertyTitle}</strong> a débuté.</p>
+      <p>Merci de signaler votre arrivée dans le logement pour informer le propriétaire. Cliquez sur le bouton ci-dessous :</p>
+      <p style="text-align: center;">
+        <a href="${mesReservationsUrl}" class="button">Signaler mon arrivée</a>
+      </p>
+      <p>Vous serez redirigé vers vos réservations où un bouton « Signaler mon arrivée » apparaîtra sur la fiche de cette réservation.</p>
+      <div class="footer">
+        <p>Cet email a été envoyé depuis la plateforme Mestoits</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${guestName || 'Client'},
+
+Votre réservation pour ${propertyTitle} a débuté.
+
+Merci de signaler votre arrivée dans le logement pour informer le propriétaire.
+Rendez-vous sur : ${mesReservationsUrl}
+
+---
+Mestoits`;
+
+  return {
+    to: guestEmail,
+    subject: `Rappel : Signalez votre arrivée - ${propertyTitle} - Mestoits`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Notification au propriétaire : le client a signalé son arrivée
+ */
+function buildArrivalSignaledEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const ownerEmail = data.ownerEmail as string;
+  const ownerName = data.ownerName as string;
+  const guestName = data.guestName as string;
+  const guestEmail = data.guestEmail as string;
+  const propertyTitle = data.propertyTitle as string;
+  const startDate = data.startDate as string;
+  const signaledAt = data.signaledAt as string;
+
+  if (!ownerEmail || !guestName || !propertyTitle) {
+    console.error('Données manquantes pour l\'email arrival_signaled');
+    return null;
+  }
+
+  const dateStr = signaledAt
+    ? new Date(signaledAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+    .info-box { background: white; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #10b981; }
+    .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0;">✅ Arrivée signalée</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour ${ownerName || 'Propriétaire'},</p>
+      <p><strong>${guestName}</strong> a signalé son arrivée dans votre bien <strong>${propertyTitle}</strong>.</p>
+      <div class="info-box">
+        <p><strong>Client :</strong> ${guestName}</p>
+        <p><strong>Email :</strong> ${guestEmail || '—'}</p>
+        <p><strong>Date d'arrivée prévue :</strong> ${startDate ? new Date(startDate).toLocaleDateString('fr-FR') : '—'}</p>
+        <p><strong>Signalé le :</strong> ${dateStr}</p>
+      </div>
+      <p>Le client a bien pris possession des lieux.</p>
+      <div class="footer">
+        <p>Cet email a été envoyé depuis la plateforme Mestoits</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${ownerName || 'Propriétaire'},
+
+${guestName} a signalé son arrivée dans votre bien ${propertyTitle}.
+
+Client : ${guestName}
+Email : ${guestEmail || '—'}
+Signalé le : ${dateStr}
+
+Le client a bien pris possession des lieux.
+
+---
+Mestoits`;
+
+  return {
+    to: ownerEmail,
+    subject: `Arrivée signalée - ${guestName} - ${propertyTitle} - Mestoits`,
     html,
     text,
   };

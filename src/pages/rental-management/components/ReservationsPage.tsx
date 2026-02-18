@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { generateReservationReceiptPDF } from '../../../utils/reservationReceiptPdfGenerator';
+import DateRangeCalendar from '../../bien-detail/components/DateRangeCalendar';
 
 interface ReservationsPageProps {
   userId: string;
@@ -36,8 +37,12 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
     guest_phone: '',
     start_date: '',
     end_date: '',
+    total_amount: '',
     status: 'pending'
   });
+  const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
+  const [selectedPropertyPrice, setSelectedPropertyPrice] = useState<number | null>(null);
+  const [selectedPropertyMinNights, setSelectedPropertyMinNights] = useState<number | null>(null);
 
   useEffect(() => {
     loadProperties();
@@ -53,7 +58,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
     try {
       const { data, error } = await supabase
         .from('properties_02')
-        .select('id, title')
+        .select('id, title, price, min_nights')
         .eq('owner_id', userId)
         .eq('status', 'active')
         .eq('operation_type', 'short-term-rental');
@@ -64,6 +69,84 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
       console.error('Erreur lors du chargement des propriétés:', error);
     }
   };
+
+  const loadUnavailableDates = useCallback(async (propertyId: string, excludeReservationId?: string) => {
+    if (!propertyId) {
+      setUnavailableDates([]);
+      return;
+    }
+    try {
+      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const dates: string[] = [];
+
+      // 1. Réservations confirmées et en attente (à exclure si on modifie cette réservation)
+      const { data: confirmedReservations } = await supabase
+        .from('reservations')
+        .select('id, start_date, end_date')
+        .eq('property_id', propertyId)
+        .in('status', ['confirmed', 'pending']);
+      (confirmedReservations || []).forEach((r: any) => {
+        if (excludeReservationId && r.id === excludeReservationId) return;
+        const start = new Date(r.start_date);
+        const end = new Date(r.end_date);
+        const current = new Date(start);
+        while (current <= end) {
+          dates.push(current.toISOString().split('T')[0]);
+          current.setDate(current.getDate() + 1);
+        }
+      });
+
+      // 2. Réservations temporaires (< 15 min)
+      const { data: tempReservations } = await supabase
+        .from('reservations_temp')
+        .select('start_date, end_date, created_at')
+        .eq('property_id', propertyId);
+      (tempReservations || [])
+        .filter((r: any) => r.created_at && new Date(r.created_at) > fifteenMinutesAgo)
+        .forEach((r: any) => {
+          const start = new Date(r.start_date);
+          const end = new Date(r.end_date);
+          const current = new Date(start);
+          while (current <= end) {
+            dates.push(current.toISOString().split('T')[0]);
+            current.setDate(current.getDate() + 1);
+          }
+        });
+
+      // 3. Périodes d'indisponibilité manuelles
+      const { data: unavailablePeriods } = await supabase
+        .from('property_unavailable_periods')
+        .select('start_date, end_date')
+        .eq('property_id', propertyId);
+      (unavailablePeriods || []).forEach((r: any) => {
+        const start = new Date(r.start_date);
+        const end = new Date(r.end_date);
+        const current = new Date(start);
+        while (current <= end) {
+          dates.push(current.toISOString().split('T')[0]);
+          current.setDate(current.getDate() + 1);
+        }
+      });
+
+      setUnavailableDates([...new Set(dates)]);
+    } catch (error) {
+      console.error('Erreur chargement dates indisponibles:', error);
+      setUnavailableDates([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (form.property_id) {
+      loadUnavailableDates(form.property_id, editingReservation?.id);
+      const prop = properties.find((p: any) => p.id === form.property_id);
+      setSelectedPropertyPrice(prop?.price ?? null);
+      setSelectedPropertyMinNights(prop?.min_nights ?? null);
+    } else {
+      setUnavailableDates([]);
+      setSelectedPropertyPrice(null);
+      setSelectedPropertyMinNights(null);
+    }
+  }, [form.property_id, properties, loadUnavailableDates, editingReservation?.id]);
 
   const loadReservations = async () => {
     try {
@@ -119,6 +202,17 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
     return diffDays > 0 ? diffDays : 0;
   };
 
+  const calculatedAmount = form.start_date && form.end_date && selectedPropertyPrice != null
+    ? calculateNights(form.start_date, form.end_date) * selectedPropertyPrice
+    : 0;
+
+  useEffect(() => {
+    if (!editingReservation && form.start_date && form.end_date && selectedPropertyPrice != null) {
+      const amt = calculateNights(form.start_date, form.end_date) * selectedPropertyPrice;
+      setForm((f) => ({ ...f, total_amount: String(Math.round(amt)) }));
+    }
+  }, [form.start_date, form.end_date, selectedPropertyPrice, editingReservation]);
+
   const handleSubmit = async () => {
     if (!form.property_id || !form.guest_name || !form.guest_email || !form.start_date || !form.end_date) {
       alert('Veuillez remplir tous les champs obligatoires');
@@ -131,19 +225,29 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
       return;
     }
 
-    // Récupérer le prix de la propriété
-    const { data: propertyData } = await supabase
-      .from('properties_02')
-      .select('price')
-      .eq('id', form.property_id)
-      .single();
-
-    if (!propertyData) {
-      alert('Erreur: Propriété introuvable');
+    if (selectedPropertyMinNights != null && nights < selectedPropertyMinNights) {
+      alert(`Le séjour minimum est de ${selectedPropertyMinNights} nuitée${selectedPropertyMinNights > 1 ? 's' : ''}. Veuillez sélectionner plus de nuits.`);
       return;
     }
 
-    const totalAmount = nights * propertyData.price;
+    const selectedStart = new Date(form.start_date);
+    const selectedEnd = new Date(form.end_date);
+    const hasConflict = unavailableDates.some((date) => {
+      const d = new Date(date);
+      return d >= selectedStart && d <= selectedEnd;
+    });
+    if (hasConflict) {
+      alert('Les dates sélectionnées chevauchent des périodes déjà réservées ou indisponibles. Veuillez choisir d\'autres dates.');
+      return;
+    }
+
+    const totalAmount = form.total_amount && form.total_amount.trim()
+      ? parseFloat(form.total_amount.replace(/\s/g, '').replace(',', '.'))
+      : calculatedAmount;
+    if (isNaN(totalAmount) || totalAmount <= 0) {
+      alert('Veuillez saisir un montant valide pour la réservation.');
+      return;
+    }
 
     setActionLoading(true);
     try {
@@ -186,6 +290,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
         guest_phone: '',
         start_date: '',
         end_date: '',
+        total_amount: '',
         status: 'pending'
       });
       await loadReservations();
@@ -228,6 +333,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
       guest_phone: reservation.guest_phone || '',
       start_date: reservation.start_date,
       end_date: reservation.end_date,
+      total_amount: String(reservation.total_amount ?? ''),
       status: reservation.status
     });
     setShowModal(true);
@@ -291,6 +397,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                 guest_phone: '',
                 start_date: '',
                 end_date: '',
+                total_amount: '',
                 status: 'pending'
               });
               setShowModal(true);
@@ -312,6 +419,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                 guest_phone: '',
                 start_date: '',
                 end_date: '',
+                total_amount: '',
                 status: 'pending'
               });
               setShowModal(true);
@@ -519,38 +627,64 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Calendrier de sélection des dates */}
+              {form.property_id && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Date d'arrivée *</label>
-                  <input
-                    type="date"
-                    value={form.start_date}
-                    onChange={(e) => {
-                      setForm({ ...form, start_date: e.target.value });
-                      if (form.end_date && new Date(e.target.value) >= new Date(form.end_date)) {
-                        setForm({ ...form, start_date: e.target.value, end_date: '' });
-                      }
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Sélectionnez vos dates *</label>
+                  {selectedPropertyMinNights != null && form.start_date && form.end_date && calculateNights(form.start_date, form.end_date) < selectedPropertyMinNights && (
+                    <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <p className="text-sm text-amber-800">
+                        <i className="ri-alert-line mr-1"></i>
+                        Le séjour minimum est de <strong>{selectedPropertyMinNights} nuitée{selectedPropertyMinNights > 1 ? 's' : ''}</strong>.
+                      </p>
+                    </div>
+                  )}
+                  <DateRangeCalendar
+                    startDate={form.start_date}
+                    endDate={form.end_date}
+                    onStartDateChange={(date) => {
+                      setForm((f) => {
+                        const next = { ...f, start_date: date };
+                        if (f.end_date && date && new Date(f.end_date) <= new Date(date)) next.end_date = '';
+                        return next;
+                      });
                     }}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
+                    onEndDateChange={(date) => setForm((f) => ({ ...f, end_date: date }))}
+                    unavailableDates={unavailableDates}
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Date de départ *</label>
-                  <input
-                    type="date"
-                    value={form.end_date}
-                    onChange={(e) => setForm({ ...form, end_date: e.target.value })}
-                    min={form.start_date || undefined}
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
-                  />
-                </div>
-              </div>
+              )}
 
+              {/* Résumé nuits + montant calculé + champ modifiable */}
               {form.start_date && form.end_date && form.property_id && (
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <div className="flex justify-between text-sm text-gray-600 mb-2">
-                    <span>Nombre de nuits:</span>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Prix par nuit</span>
+                    <span className="font-semibold">
+                      {selectedPropertyPrice != null ? selectedPropertyPrice.toLocaleString('fr-FR') : '—'} FCFA
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm text-gray-600">
+                    <span>Nombre de nuits</span>
                     <span className="font-semibold">{calculateNights(form.start_date, form.end_date)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-gray-600 border-t border-gray-200 pt-2">
+                    <span>Montant calculé</span>
+                    <span className="font-semibold text-teal-600">{calculatedAmount.toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Montant total (modifiable)
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={form.total_amount}
+                      onChange={(e) => setForm({ ...form, total_amount: e.target.value.replace(/[^\d]/g, '') })}
+                      placeholder={String(calculatedAmount)}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Saisissez le montant final (FCFA). Laissez vide pour utiliser le montant calculé.</p>
                   </div>
                 </div>
               )}

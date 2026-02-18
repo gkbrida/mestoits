@@ -29,6 +29,11 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
   const [showPhotoGallery, setShowPhotoGallery] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [currentPhotoList, setCurrentPhotoList] = useState<string[]>([]);
+  const [showInstallmentDetailModal, setShowInstallmentDetailModal] = useState(false);
+  const [selectedRentForDetail, setSelectedRentForDetail] = useState<any>(null);
+
+  const formatPrice = (n: number) => `${Number(n).toLocaleString('fr-FR')} FCFA`;
+  const formatDate = (d: string) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 
   // Charger les détails complets de la propriété depuis properties_02
   useEffect(() => {
@@ -880,7 +885,11 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Loyers à payer</h2>
               <div className="space-y-3">
                 {rental.unpaidRents.map((rent: any, index: number) => (
-                  <div key={index} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 p-4 sm:p-5 rounded-lg md:rounded-xl border-2 border-red-200 bg-red-50">
+                  <div
+                    key={index}
+                    onClick={() => rent.installmentPlan && (setSelectedRentForDetail(rent), setShowInstallmentDetailModal(true))}
+                    className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 p-4 sm:p-5 rounded-lg md:rounded-xl border-2 border-red-200 bg-red-50 ${rent.installmentPlan ? 'cursor-pointer hover:bg-red-100/80 transition-colors' : ''}`}
+                  >
                     <div className="flex items-center gap-3 sm:gap-4 min-w-0">
                       <div className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-red-100 flex-shrink-0">
                         <i className="ri-error-warning-line text-red-600 text-xl sm:text-2xl"></i>
@@ -888,16 +897,37 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
                       <div className="min-w-0">
                         <p className="text-sm sm:text-base font-medium text-gray-900">{rent.month}</p>
                         <p className="text-xs sm:text-sm text-gray-600">À payer avant le {rent.dueDate}</p>
+                        {rent.installmentPlan && (
+                          <p className="text-xs sm:text-sm text-amber-700 mt-1">
+                            Paiement échelonné • Reste: <strong>{formatPrice(rent.installmentPlan.remainingAmount)}</strong>
+                            {rent.installmentPlan.remainingAmount > 0 && (
+                              <span className="ml-1">• Cliquez pour voir le détail</span>
+                            )}
+                          </p>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4">
-                      <span className="text-lg sm:text-xl font-bold text-gray-900">{rent.amount}</span>
-                      <button
-                        onClick={() => handlePayRent(rent)}
-                        className="px-4 sm:px-6 py-2 sm:py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-xs sm:text-sm md:text-base font-medium hover:shadow-lg transition-all cursor-pointer whitespace-nowrap"
-                      >
-                        Payer maintenant
-                      </button>
+                      <span className="text-lg sm:text-xl font-bold text-gray-900">
+                        {rent.installmentPlan && rent.installmentPlan.remainingAmount > 0
+                          ? formatPrice(rent.installmentPlan.remainingAmount)
+                          : rent.amount}
+                      </span>
+                      {!rent.installmentPlan ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handlePayRent(rent); }}
+                          className="px-4 sm:px-6 py-2 sm:py-2.5 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-xs sm:text-sm md:text-base font-medium hover:shadow-lg transition-all cursor-pointer whitespace-nowrap"
+                        >
+                          Payer maintenant
+                        </button>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedRentForDetail(rent); setShowInstallmentDetailModal(true); }}
+                          className="px-4 sm:px-6 py-2 sm:py-2.5 bg-teal-50 text-teal-600 border-2 border-teal-200 rounded-lg md:rounded-xl text-xs sm:text-sm md:text-base font-medium hover:bg-teal-100 transition-all cursor-pointer whitespace-nowrap"
+                        >
+                          Voir les échéances
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -953,7 +983,7 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h3 className="text-xl sm:text-2xl font-bold text-gray-900">Confirmer le paiement</h3>
               <button
-                onClick={() => setShowPaymentModal(false)}
+                onClick={() => { setShowPaymentModal(false); setSelectedRent(null); }}
                 className="flex items-center justify-center w-8 h-8 sm:w-10 sm:h-10 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer flex-shrink-0"
               >
                 <i className="ri-close-line text-xl sm:text-2xl"></i>
@@ -1049,6 +1079,7 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
               <button
                 onClick={() => {
                   setShowPaymentModal(false);
+                  setSelectedRent(null);
                   setSelectedPaymentMethod('stripe');
                 }}
                 className="flex-1 px-4 sm:px-6 py-2.5 sm:py-3 border-2 border-gray-200 text-gray-700 rounded-lg md:rounded-xl text-sm sm:text-base font-medium hover:bg-gray-50 transition-colors cursor-pointer whitespace-nowrap"
@@ -1085,6 +1116,59 @@ export default function RentalDetailView({ rental, onBack }: RentalDetailViewPro
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Détail des échéances (côté locataire) */}
+      {showInstallmentDetailModal && selectedRentForDetail?.installmentPlan && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setShowInstallmentDetailModal(false); setSelectedRentForDetail(null); }}>
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Détail des échéances - {selectedRentForDetail.month}</h3>
+              <button onClick={() => { setShowInstallmentDetailModal(false); setSelectedRentForDetail(null); }} className="text-gray-400 hover:text-gray-600">
+                <i className="ri-close-line text-2xl"></i>
+              </button>
+            </div>
+            <div className="mb-4 p-3 bg-amber-50 rounded-lg">
+              <p className="text-sm font-medium text-amber-800">Montant restant à payer: {formatPrice(selectedRentForDetail.installmentPlan.remainingAmount)}</p>
+            </div>
+            <div className="space-y-2">
+              {selectedRentForDetail.installmentPlan.installments.map((inst: any) => (
+                <div key={inst.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200">
+                  <div>
+                    <span className="font-medium">Échéance {inst.installment_number}</span>
+                    <span className="text-sm text-gray-600 ml-2">- {formatDate(inst.due_date)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{formatPrice(inst.amount)}</span>
+                    {inst.status === 'paid' ? (
+                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">Payé</span>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setShowInstallmentDetailModal(false);
+                          handlePayRent({
+                            id: inst.id,
+                            month: `${selectedRentForDetail.month} - Échéance ${inst.installment_number}`,
+                            amount: formatPrice(inst.amount),
+                            amountNumber: inst.amount,
+                            dueDate: formatDate(inst.due_date),
+                          });
+                          setSelectedRentForDetail(null);
+                        }}
+                        className="px-3 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 transition-colors cursor-pointer"
+                      >
+                        Payer
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { setShowInstallmentDetailModal(false); setSelectedRentForDetail(null); }} className="mt-4 w-full px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+              Fermer
+            </button>
           </div>
         </div>
       )}

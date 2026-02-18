@@ -142,6 +142,21 @@ export default async function handler(
         paymentId = paymentData.id;
         console.log(`✅ Paiement trouvé par référence: ${paymentId}`);
       } else {
+        // Chercher aussi dans payment_installment_payments (échéances)
+        const { data: installmentData } = await supabaseAdmin
+          .from('payment_installment_payments')
+          .select('id')
+          .eq('transaction_id', referenceNumber)
+          .eq('status', 'pending')
+          .maybeSingle();
+
+        if (installmentData) {
+          paymentId = installmentData.id;
+          console.log(`✅ Échéance trouvée par référence: ${paymentId}`);
+        }
+      }
+
+      if (!paymentId) {
         const { data: tempData } = await supabaseAdmin
           .from('reservations_temp')
           .select('id')
@@ -346,70 +361,69 @@ L'équipe Mestoits`;
         message: 'Réservation confirmée avec succès'
       });
     } else if (paymentId) {
-      // Vérifier si c'est un paiement échelonné ou un paiement de loyer
-      // D'abord, vérifier dans installment_payments
+      // Vérifier si c'est une échéance (payment_installment_payments) ou un paiement de loyer
       const { data: installmentPayment } = await supabaseAdmin
-        .from('installment_payments')
-        .select('id, installment_plan_id')
+        .from('payment_installment_payments')
+        .select('id, plan_id')
         .eq('id', paymentId)
         .eq('status', 'pending')
         .maybeSingle();
 
       if (installmentPayment) {
-        // C'est un paiement échelonné
-        console.log(`🔄 Mise à jour du paiement échelonné ${paymentId}...`);
+        // C'est une échéance de paiement échelonné
+        console.log(`🔄 Mise à jour de l'échéance ${paymentId}...`);
         
         const { error: updateError } = await supabaseAdmin
-          .from('installment_payments')
+          .from('payment_installment_payments')
           .update({
             status: 'paid',
-            payment_date: new Date().toISOString().split('T')[0], // Date seulement pour installment_payments
+            payment_date: new Date().toISOString().split('T')[0],
             payment_method: 'mobile_money',
             notes: `Référence PayDunya: ${referenceNumber}`,
           })
           .eq('id', paymentId);
 
         if (updateError) {
-          console.error('❌ Erreur lors de la mise à jour du paiement échelonné:', updateError);
+          console.error('❌ Erreur lors de la mise à jour de l\'échéance:', updateError);
           return res.status(500).json({
             success: false,
-            error: 'Erreur lors de la mise à jour du paiement échelonné'
+            error: 'Erreur lors de la mise à jour de l\'échéance'
           });
         }
 
-        console.log(`✅ Paiement échelonné ${paymentId} mis à jour avec succès`);
+        console.log(`✅ Échéance ${paymentId} mise à jour avec succès`);
 
-        // Traiter la commission
-        try {
-          const { data: paymentData } = await supabaseAdmin
-            .from('installment_payments')
-            .select('amount, installment_plan_id')
-            .eq('id', paymentId)
-            .single();
+        // Vérifier si toutes les échéances sont payées -> mettre à jour le paiement principal
+        const { data: planData } = await supabaseAdmin
+          .from('payment_installment_plans')
+          .select('payment_id')
+          .eq('id', installmentPayment.plan_id)
+          .single();
 
-          if (paymentData) {
-            const { data: planData } = await supabaseAdmin
-              .from('installment_plans')
-              .select('tenant_id')
-              .eq('id', paymentData.installment_plan_id)
-              .single();
+        if (planData) {
+          const { data: remainingInstallments } = await supabaseAdmin
+            .from('payment_installment_payments')
+            .select('id')
+            .eq('plan_id', installmentPayment.plan_id)
+            .neq('status', 'paid');
 
-            const { processCommission } = await import('./utils/commissionHandler');
-            await processCommission(
-              'installment_payment',
-              paymentId,
-              planData?.tenant_id || null,
-              parseFloat(paymentData.amount)
-            );
+          if (!remainingInstallments || remainingInstallments.length === 0) {
+            await supabaseAdmin
+              .from('payments')
+              .update({
+                status: 'paid',
+                payment_date: new Date().toISOString(),
+                payment_method: 'mobile_money',
+                transaction_id: referenceNumber,
+              })
+              .eq('id', planData.payment_id);
+            console.log(`✅ Toutes les échéances payées - Paiement principal ${planData.payment_id} marqué comme payé`);
           }
-        } catch (commissionError) {
-          console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
-          // Ne pas bloquer le callback si la commission échoue
         }
 
         return res.status(200).json({
           success: true,
-          message: 'Paiement échelonné mis à jour avec succès'
+          message: 'Échéance mise à jour avec succès'
         });
       } else {
         // C'est un paiement de loyer

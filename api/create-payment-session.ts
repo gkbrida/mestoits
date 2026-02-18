@@ -92,7 +92,7 @@ export default async function handler(
       console.warn('⚠️ ATTENTION: paymentId non fourni! Le paiement ne pourra pas être mis à jour automatiquement.');
     }
 
-    // Vérifier si c'est un paiement échelonné en vérifiant si le paymentId existe dans installment_payments
+    // Vérifier si c'est un paiement d'échéance (payment_installment_payments)
     let isInstallmentPayment = false;
     if (paymentId) {
       try {
@@ -109,7 +109,7 @@ export default async function handler(
           });
           
           const { data: installmentPayment } = await supabaseAdmin
-            .from('installment_payments')
+            .from('payment_installment_payments')
             .select('id')
             .eq('id', paymentId)
             .maybeSingle();
@@ -122,13 +122,9 @@ export default async function handler(
       }
     }
 
-    // Construire les URLs de retour selon le type de paiement
-    const successUrl = isInstallmentPayment
-      ? `${origin}/mes-paiements-echelonnes?payment=success&paymentId=${paymentId || ''}&lease=${leaseId || ''}`
-      : `${origin}/mes-locations?payment=success&lease=${leaseId}&paymentId=${paymentId || ''}`;
-    const cancelUrl = isInstallmentPayment
-      ? `${origin}/mes-paiements-echelonnes?payment=cancelled&lease=${leaseId || ''}`
-      : `${origin}/mes-locations?payment=cancelled&lease=${leaseId}`;
+    // Construire les URLs de retour - toujours mes-locations (loyer ou échéance de loyer)
+    const successUrl = `${origin}/mes-locations?payment=success&lease=${leaseId}&paymentId=${paymentId || ''}`;
+    const cancelUrl = `${origin}/mes-locations?payment=cancelled&lease=${leaseId}`;
     
     console.log(`✅ Success URL: ${successUrl}`);
     console.log(`❌ Cancel URL: ${cancelUrl}`);

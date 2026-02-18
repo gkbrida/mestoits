@@ -52,6 +52,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
   const [form, setForm] = useState({
     property_id: '',
     total_amount: '',
+    first_payment_type: 'none' as 'none' | 'percentage' | 'fixed',
+    first_payment_value: '',
     number_of_installments: '',
     start_date: '',
     frequency: 'monthly',
@@ -79,7 +81,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       // Charger tous les biens en vente
       const { data: allProperties, error: propertiesError } = await supabase
         .from('properties_02')
-        .select('id, title, address, city, surface_area, rooms')
+        .select('id, title, address, city, surface_area, rooms, price')
         .eq('owner_id', userId)
         .eq('status', 'active')
         .eq('operation_type', 'sale');
@@ -210,7 +212,31 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
 
     const totalAmount = parseFloat(form.total_amount);
     const numberOfInstallments = parseInt(form.number_of_installments);
-    const installmentAmount = totalAmount / numberOfInstallments;
+    if (numberOfInstallments < 2) {
+      alert('Le nombre d\'échéances doit être au moins 2');
+      return;
+    }
+
+    // Calcul du premier paiement et du reste
+    let firstPaymentAmount = 0;
+    if (form.first_payment_type === 'percentage' && form.first_payment_value) {
+      const pct = parseFloat(form.first_payment_value);
+      if (pct > 0 && pct < 100) {
+        firstPaymentAmount = Math.round((totalAmount * pct) / 100);
+      }
+    } else if (form.first_payment_type === 'fixed' && form.first_payment_value) {
+      firstPaymentAmount = parseFloat(form.first_payment_value);
+    }
+
+    if (firstPaymentAmount >= totalAmount) {
+      alert('Le premier paiement ne peut pas être supérieur ou égal au montant total');
+      return;
+    }
+
+    const remainder = totalAmount - firstPaymentAmount;
+    const remainingInstallments = firstPaymentAmount > 0 ? numberOfInstallments - 1 : numberOfInstallments;
+    const regularInstallmentAmount = Math.round(remainder / remainingInstallments);
+    const installmentAmount = firstPaymentAmount > 0 ? regularInstallmentAmount : totalAmount / numberOfInstallments;
     const paymentDueDay = form.payment_due_day ? parseInt(form.payment_due_day) : null;
 
     setActionLoading(true);
@@ -220,7 +246,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         owner_id: userId,
         total_amount: totalAmount,
         number_of_installments: numberOfInstallments,
-        installment_amount: installmentAmount,
+        installment_amount: firstPaymentAmount > 0 ? regularInstallmentAmount : installmentAmount,
         start_date: form.start_date,
         frequency: form.frequency,
         payment_due_day: paymentDueDay,
@@ -255,43 +281,41 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         planId = data.id;
         alert('Plan de paiement créé avec succès !');
 
-        // Créer les échéances
+        // Créer les échéances (premier paiement éventuel + reste réparti)
         const installments = [];
         const startDate = new Date(form.start_date);
-        
+
+        // Montants : 1er = firstPaymentAmount, 2..N = répartition du reste (dernière échéance absorbe les arrondis)
+        const regularAmount = Math.round(remainder / remainingInstallments);
+        const lastRegularAmount = remainder - regularAmount * (remainingInstallments - 1);
+
         for (let i = 0; i < numberOfInstallments; i++) {
           let dueDate: Date;
-          
+
           if (form.frequency === 'monthly') {
-            // Utiliser payment_due_day pour les paiements mensuels
-            if (paymentDueDay) {
-              dueDate = calculateDueDate(startDate, paymentDueDay, i);
-            } else {
-              // Fallback si payment_due_day n'est pas défini
-              dueDate = new Date(startDate);
-              dueDate.setMonth(dueDate.getMonth() + i);
-            }
+            dueDate = paymentDueDay
+              ? calculateDueDate(startDate, paymentDueDay, i)
+              : (() => { const d = new Date(startDate); d.setMonth(d.getMonth() + i); return d; })();
           } else if (form.frequency === 'weekly') {
             dueDate = new Date(startDate);
             dueDate.setDate(dueDate.getDate() + (i * 7));
           } else if (form.frequency === 'quarterly') {
-            // Utiliser payment_due_day pour les paiements trimestriels
-            if (paymentDueDay) {
-              dueDate = calculateDueDate(startDate, paymentDueDay, i * 3);
-            } else {
-              // Fallback si payment_due_day n'est pas défini
-              dueDate = new Date(startDate);
-              dueDate.setMonth(dueDate.getMonth() + (i * 3));
-            }
+            dueDate = paymentDueDay
+              ? calculateDueDate(startDate, paymentDueDay, i * 3)
+              : (() => { const d = new Date(startDate); d.setMonth(d.getMonth() + (i * 3)); return d; })();
           } else {
             dueDate = new Date(startDate);
           }
+
+          const amount = firstPaymentAmount > 0 && i === 0
+            ? firstPaymentAmount
+            : (firstPaymentAmount > 0 && i === numberOfInstallments - 1 ? lastRegularAmount : regularAmount);
 
           installments.push({
             installment_plan_id: planId,
             installment_number: i + 1,
             due_date: dueDate.toISOString().split('T')[0],
-            amount: installmentAmount,
+            amount: Math.round(amount * 100) / 100,
             status: 'pending'
           });
         }
@@ -319,7 +343,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
               .eq('id', form.property_id)
               .single();
 
-            // Construire l'email HTML
+            const effectiveInstallmentAmount = firstPaymentAmount > 0 ? regularInstallmentAmount : installmentAmount;
+
             const emailHtml = buildInstallmentPlanEmail({
               payerName: `${form.payer_first_name} ${form.payer_last_name}`,
               ownerName: ownerData?.full_name || 'Le propriétaire',
@@ -332,7 +357,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
               propertyRooms: propertyData?.rooms,
               totalAmount: totalAmount,
               numberOfInstallments: numberOfInstallments,
-              installmentAmount: installmentAmount,
+              installmentAmount: effectiveInstallmentAmount,
+              firstPaymentAmount: firstPaymentAmount > 0 ? firstPaymentAmount : undefined,
               frequency: form.frequency,
               paymentDueDay: paymentDueDay,
               startDate: form.start_date,
@@ -355,7 +381,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
               propertyRooms: propertyData?.rooms,
               totalAmount: totalAmount,
               numberOfInstallments: numberOfInstallments,
-              installmentAmount: installmentAmount,
+              installmentAmount: effectiveInstallmentAmount,
+              firstPaymentAmount: firstPaymentAmount > 0 ? firstPaymentAmount : undefined,
               frequency: form.frequency,
               paymentDueDay: paymentDueDay,
               startDate: form.start_date,
@@ -397,6 +424,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       setForm({
         property_id: '',
         total_amount: '',
+        first_payment_type: 'none',
+        first_payment_value: '',
         number_of_installments: '',
         start_date: '',
         frequency: 'monthly',
@@ -451,6 +480,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
     setForm({
       property_id: plan.property_id,
       total_amount: plan.total_amount.toString(),
+      first_payment_type: 'none',
+      first_payment_value: '',
       number_of_installments: plan.number_of_installments.toString(),
       start_date: plan.start_date,
       frequency: plan.frequency,
@@ -541,6 +572,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
               setForm({
                 property_id: '',
                 total_amount: '',
+                first_payment_type: 'none',
+                first_payment_value: '',
                 number_of_installments: '',
                 start_date: '',
                 frequency: 'monthly',
@@ -567,6 +600,8 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
               setForm({
                 property_id: '',
                 total_amount: '',
+                first_payment_type: 'none',
+                first_payment_value: '',
                 number_of_installments: '',
                 start_date: '',
                 frequency: 'monthly',
@@ -846,13 +881,22 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 <label className="block text-sm font-medium text-gray-700 mb-2">Bien *</label>
                 <select
                   value={form.property_id}
-                  onChange={(e) => setForm({ ...form, property_id: e.target.value })}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const prop = properties.find((p: any) => p.id === id);
+                    setForm({
+                      ...form,
+                      property_id: id,
+                      total_amount: prop?.price != null ? String(prop.price) : form.total_amount,
+                    });
+                  }}
                   className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
                 >
                   <option value="">Sélectionner un bien</option>
                   {properties.map((property) => (
                     <option key={property.id} value={property.id}>
                       {property.title} {property.address ? `- ${property.address}, ${property.city || ''}` : ''}
+                      {property.price != null ? ` - ${Number(property.price).toLocaleString('fr-FR')} FCFA` : ''}
                     </option>
                   ))}
                 </select>
@@ -882,6 +926,68 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                   />
                 </div>
               </div>
+
+              {/* Premier paiement (optionnel) - uniquement en création */}
+              {!editingPlan && (
+              <div className="border border-gray-200 rounded-lg p-4 bg-gray-50/50">
+                <label className="block text-sm font-medium text-gray-700 mb-3">Premier paiement (optionnel)</label>
+                <p className="text-xs text-gray-500 mb-3">
+                  Si défini, les échéances seront calculées sur le reste (montant total moins le premier paiement).
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      id="first-none"
+                      name="first_payment_type"
+                      checked={form.first_payment_type === 'none'}
+                      onChange={() => setForm({ ...form, first_payment_type: 'none', first_payment_value: '' })}
+                      className="w-4 h-4 text-teal-600"
+                    />
+                    <label htmlFor="first-none" className="text-sm">Aucun</label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      id="first-percentage"
+                      name="first_payment_type"
+                      checked={form.first_payment_type === 'percentage'}
+                      onChange={() => setForm({ ...form, first_payment_type: 'percentage', first_payment_value: '' })}
+                      className="w-4 h-4 text-teal-600"
+                    />
+                    <label htmlFor="first-percentage" className="text-sm">Pourcentage</label>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      id="first-fixed"
+                      name="first_payment_type"
+                      checked={form.first_payment_type === 'fixed'}
+                      onChange={() => setForm({ ...form, first_payment_type: 'fixed', first_payment_value: '' })}
+                      className="w-4 h-4 text-teal-600"
+                    />
+                    <label htmlFor="first-fixed" className="text-sm">Montant fixe</label>
+                  </div>
+                </div>
+                {(form.first_payment_type === 'percentage' || form.first_payment_type === 'fixed') && (
+                  <div className="mt-3">
+                    <input
+                      type="number"
+                      step={form.first_payment_type === 'percentage' ? '1' : '0.01'}
+                      min={form.first_payment_type === 'percentage' ? '1' : '0'}
+                      max={form.first_payment_type === 'percentage' ? '99' : undefined}
+                      value={form.first_payment_value}
+                      onChange={(e) => setForm({ ...form, first_payment_value: e.target.value })}
+                      className="w-32 px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
+                      placeholder={form.first_payment_type === 'percentage' ? 'Ex: 20' : 'Ex: 500000'}
+                    />
+                    <span className="ml-2 text-sm text-gray-600">
+                      {form.first_payment_type === 'percentage' ? '%' : 'FCFA'}
+                    </span>
+                  </div>
+                )}
+              </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -999,15 +1105,48 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 </div>
               </div>
 
-              {form.total_amount && form.number_of_installments && (
+              {form.total_amount && form.number_of_installments && parseInt(form.number_of_installments) >= 2 && (
                 <div className="bg-gray-50 rounded-lg p-4">
                   <div className="text-sm text-gray-600 mb-2">Résumé du plan:</div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Montant par échéance:</span>
-                    <span className="font-semibold text-gray-900">
-                      {(parseFloat(form.total_amount) / parseInt(form.number_of_installments || '1')).toLocaleString('fr-FR')} FCFA
-                    </span>
-                  </div>
+                  {(() => {
+                    const total = parseFloat(form.total_amount);
+                    const count = parseInt(form.number_of_installments || '1');
+                    let first = 0;
+                    if (form.first_payment_type === 'percentage' && form.first_payment_value) {
+                      const pct = parseFloat(form.first_payment_value);
+                      if (pct > 0 && pct < 100) first = Math.round((total * pct) / 100);
+                    } else if (form.first_payment_type === 'fixed' && form.first_payment_value) {
+                      first = parseFloat(form.first_payment_value);
+                    }
+                    const remainder = total - first;
+                    const remainingCount = first > 0 ? count - 1 : count;
+                    const regularAmount = first > 0 ? Math.round(remainder / remainingCount) : total / count;
+                    return (
+                      <div className="space-y-2 text-sm">
+                        {first > 0 ? (
+                          <>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">1er paiement:</span>
+                              <span className="font-semibold text-gray-900">{first.toLocaleString('fr-FR')} FCFA</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Reste à répartir:</span>
+                              <span>{remainder.toLocaleString('fr-FR')} FCFA</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Échéances suivantes ({remainingCount} ×):</span>
+                              <span className="font-semibold text-teal-600">{regularAmount.toLocaleString('fr-FR')} FCFA</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Montant par échéance:</span>
+                            <span className="font-semibold text-gray-900">{(total / count).toLocaleString('fr-FR')} FCFA</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -1060,6 +1199,7 @@ function buildInstallmentPlanEmail(data: {
   totalAmount: number;
   numberOfInstallments: number;
   installmentAmount: number;
+  firstPaymentAmount?: number;
   frequency: string;
   paymentDueDay: number | null;
   startDate: string;
@@ -1153,7 +1293,10 @@ function buildInstallmentPlanEmail(data: {
         <h3 style="margin-top: 0; color: #10b981;">Détails du plan de paiement</h3>
         <p><strong>Montant total:</strong> <span class="highlight">${formatPrice(data.totalAmount)}</span></p>
         <p><strong>Nombre d'échéances:</strong> ${data.numberOfInstallments}</p>
-        <p><strong>Montant par échéance:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span></p>
+        ${data.firstPaymentAmount
+          ? `<p><strong>1er paiement:</strong> <span class="highlight">${formatPrice(data.firstPaymentAmount)}</span></p>
+             <p><strong>Échéances suivantes:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span> par échéance</p>`
+          : `<p><strong>Montant par échéance:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span></p>`}
         <p><strong>Fréquence:</strong> ${getFrequencyLabel(data.frequency)}</p>
         <p><strong>Date de début:</strong> ${formatDate(data.startDate)}</p>
         ${paymentDueDayInfo}
@@ -1204,6 +1347,7 @@ function buildInstallmentPlanEmailText(data: {
   totalAmount: number;
   numberOfInstallments: number;
   installmentAmount: number;
+  firstPaymentAmount?: number;
   frequency: string;
   paymentDueDay: number | null;
   startDate: string;
@@ -1261,7 +1405,10 @@ ${data.ownerEmail ? `- Email: ${data.ownerEmail}\n` : ''}${data.ownerPhone ? `- 
 DÉTAILS DU PLAN DE PAIEMENT:
 - Montant total: ${formatPrice(data.totalAmount)}
 - Nombre d'échéances: ${data.numberOfInstallments}
-- Montant par échéance: ${formatPrice(data.installmentAmount)}
+${data.firstPaymentAmount
+  ? `- 1er paiement: ${formatPrice(data.firstPaymentAmount)}
+- Échéances suivantes: ${formatPrice(data.installmentAmount)} par échéance`
+  : `- Montant par échéance: ${formatPrice(data.installmentAmount)}`}
 - Fréquence: ${getFrequencyLabel(data.frequency)}
 - Date de début: ${formatDate(data.startDate)}
 ${paymentDueDayInfo}

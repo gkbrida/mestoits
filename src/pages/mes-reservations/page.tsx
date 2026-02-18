@@ -26,6 +26,8 @@ interface Reservation {
   total_amount: number;
   status: string;
   created_at: string;
+  arrival_signaled_at?: string | null;
+  arrival_reminder_sent_at?: string | null;
 }
 
 export default function MesReservationsPage() {
@@ -41,7 +43,23 @@ export default function MesReservationsPage() {
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [signalingArrival, setSignalingArrival] = useState<string | null>(null);
   const { sendEmail } = useEmail();
+
+  // Réservation commencée = date du jour >= date d'arrivée
+  const isReservationStarted = (startDate: string) => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const start = new Date(startDate);
+    start.setHours(0, 0, 0, 0);
+    return today >= start;
+  };
+
+  const showArrivalButton = (r: Reservation) =>
+    r.status === 'confirmed' &&
+    isReservationStarted(r.start_date) &&
+    new Date(r.end_date) >= new Date() && // pas encore terminée
+    !r.arrival_signaled_at;
 
   useEffect(() => {
     loadUserEmail();
@@ -52,6 +70,37 @@ export default function MesReservationsPage() {
       loadReservations();
     }
   }, [userEmail]);
+
+  // Quand les réservations sont chargées : envoyer le rappel au locataire si le bouton apparaît
+  useEffect(() => {
+    if (!reservations.length) return;
+
+    const sendReminders = async () => {
+      for (const r of reservations) {
+        if (!showArrivalButton(r) || r.arrival_reminder_sent_at) continue;
+
+        try {
+          const result = await sendEmail('arrival_reminder', {
+            guestEmail: r.guest_email,
+            guestName: r.guest_name,
+            propertyTitle: r.property_title || 'Bien immobilier',
+            appUrl: window.location.origin,
+          });
+
+          if (result.success) {
+            await supabase
+              .from('reservations')
+              .update({ arrival_reminder_sent_at: new Date().toISOString() })
+              .eq('id', r.id);
+          }
+        } catch (e) {
+          console.error('Erreur envoi rappel arrivée:', e);
+        }
+      }
+    };
+
+    sendReminders();
+  }, [reservations]);
 
   const loadUserEmail = async () => {
     try {
@@ -309,6 +358,41 @@ L'équipe Mestoits`,
     return new Intl.NumberFormat('fr-FR').format(amount);
   };
 
+  const handleSignalArrival = async (e: React.MouseEvent, reservation: Reservation) => {
+    e.stopPropagation();
+    if (signalingArrival) return;
+
+    setSignalingArrival(reservation.id);
+    try {
+      const { error } = await supabase
+        .from('reservations')
+        .update({ arrival_signaled_at: new Date().toISOString() })
+        .eq('id', reservation.id);
+
+      if (error) throw error;
+
+      if (reservation.owner_email) {
+        await sendEmail('arrival_signaled', {
+          ownerEmail: reservation.owner_email,
+          ownerName: reservation.owner_name || 'Propriétaire',
+          guestName: reservation.guest_name,
+          guestEmail: reservation.guest_email,
+          propertyTitle: reservation.property_title || 'Bien immobilier',
+          startDate: reservation.start_date,
+          signaledAt: new Date().toISOString(),
+        });
+      }
+
+      alert('Arrivée signalée ! Le propriétaire a été informé par email.');
+      await loadReservations();
+    } catch (err: any) {
+      console.error('Erreur signalement arrivée:', err);
+      alert(`Erreur : ${err.message || 'Erreur inconnue'}`);
+    } finally {
+      setSignalingArrival(null);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Navbar onMenuToggle={() => setIsMenuOpen(true)} />
@@ -392,6 +476,25 @@ L'équipe Mestoits`,
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      {showArrivalButton(reservation) && (
+                        <button
+                          onClick={(e) => handleSignalArrival(e, reservation)}
+                          disabled={!!signalingArrival}
+                          className="px-3 sm:px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {signalingArrival === reservation.id ? (
+                            <>
+                              <i className="ri-loader-4-line animate-spin text-sm sm:text-base"></i>
+                              Envoi...
+                            </>
+                          ) : (
+                            <>
+                              <i className="ri-home-heart-line text-sm sm:text-base"></i>
+                              Signaler mon arrivée
+                            </>
+                          )}
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();

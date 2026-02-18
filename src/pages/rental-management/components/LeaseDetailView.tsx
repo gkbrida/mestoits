@@ -20,6 +20,24 @@ interface Inventory {
   created_at: string;
 }
 
+interface PaymentInstallment {
+  id: string;
+  installment_number: number;
+  due_date: string;
+  amount: number;
+  status: string;
+  payment_date?: string;
+}
+
+interface PaymentInstallmentPlan {
+  id: string;
+  payment_id: string;
+  total_amount: number;
+  number_of_installments: number;
+  installments: PaymentInstallment[];
+  remainingAmount: number;
+}
+
 interface RentPayment {
   id: string;
   month: string;
@@ -28,6 +46,7 @@ interface RentPayment {
   paid: boolean;
   paid_date?: string;
   payment_method?: string;
+  installmentPlan?: PaymentInstallmentPlan;
 }
 
 export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps) {
@@ -59,6 +78,14 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
   const [existingReceiptInfo, setExistingReceiptInfo] = useState<{status: string, dueDate: string} | null>(null);
   const [confirmationStep, setConfirmationStep] = useState(1); // 1 = première confirmation, 2 = deuxième confirmation
   const [showEditLeaseModal, setShowEditLeaseModal] = useState(false);
+  const [showInstallmentPlanModal, setShowInstallmentPlanModal] = useState(false);
+  const [showInstallmentDetailModal, setShowInstallmentDetailModal] = useState(false);
+  const [installmentPlanForm, setInstallmentPlanForm] = useState<{
+    paymentId: string;
+    numberOfInstallments: string;
+    installmentAmounts: number[];
+  }>({ paymentId: '', numberOfInstallments: '2', installmentAmounts: [] });
+  const [selectedPaymentForDetail, setSelectedPaymentForDetail] = useState<RentPayment | null>(null);
   const [editModalOwnerData, setEditModalOwnerData] = useState<{ full_name?: string; company_address?: string; phone?: string; email?: string } | null>(null);
   const [editModalPropertyData, setEditModalPropertyData] = useState<{ address?: string; city?: string; property_type?: string; surface_area?: number; bedrooms?: number; features?: string[] | string } | null>(null);
   const [editModalTenantData, setEditModalTenantData] = useState<{ first_name?: string; last_name?: string; profession?: string; phone?: string; email?: string; identity_document?: string } | null>(null);
@@ -152,19 +179,63 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
 
       if (paymentsError) throw paymentsError;
 
+      // Charger les plans d'échelonnement pour les paiements (si les tables existent)
+      const paymentIds = (existingPayments || []).map((p: any) => p.id);
+      const plansMap = new Map<string, PaymentInstallmentPlan>();
+
+      if (paymentIds.length > 0) {
+        const { data: plansData, error: plansError } = await supabase
+          .from('payment_installment_plans')
+          .select('*')
+          .in('payment_id', paymentIds);
+
+        if (!plansError && plansData && plansData.length > 0) {
+          const planIds = plansData.map((pl: any) => pl.id);
+          const { data: installmentsData } = await supabase
+            .from('payment_installment_payments')
+            .select('*')
+            .in('plan_id', planIds)
+            .order('installment_number', { ascending: true });
+
+          plansData.forEach((plan: any) => {
+            const installments = (installmentsData || []).filter((ip: any) => ip.plan_id === plan.id);
+            const remaining = installments
+              .filter((ip: any) => ip.status !== 'paid')
+              .reduce((sum: number, ip: any) => sum + parseFloat(ip.amount), 0);
+            plansMap.set(plan.payment_id, {
+              id: plan.id,
+              payment_id: plan.payment_id,
+              total_amount: parseFloat(plan.total_amount),
+              number_of_installments: plan.number_of_installments,
+              installments: installments.map((ip: any) => ({
+                id: ip.id,
+                installment_number: ip.installment_number,
+                due_date: ip.due_date,
+                amount: parseFloat(ip.amount),
+                status: ip.status,
+                payment_date: ip.payment_date,
+              })),
+              remainingAmount: remaining,
+            });
+          });
+        }
+      }
+
       // Convertir les paiements de la DB en format RentPayment
       const payments: RentPayment[] = (existingPayments || []).map((p: any) => {
         const paymentDate = new Date(p.due_date);
         const monthName = paymentDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
-        
+        const plan = plansMap.get(p.id);
+
         return {
           id: p.id,
-        month: monthName,
+          month: monthName,
           amount: parseFloat(p.amount),
           due_date: p.due_date,
           paid: p.status === 'paid',
           paid_date: p.status === 'paid' && p.payment_date ? p.payment_date : undefined,
           payment_method: p.payment_method || undefined,
+          installmentPlan: plan,
         };
       });
     
@@ -586,6 +657,81 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
     } catch (error: any) {
       console.error('Erreur:', error);
       alert(`Une erreur est survenue: ${error.message || 'Erreur inconnue'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleCreateInstallmentPlan = async () => {
+    if (!installmentPlanForm.paymentId || !installmentPlanForm.numberOfInstallments) return;
+    const payment = rentPayments.find((p) => p.id === installmentPlanForm.paymentId);
+    if (!payment || payment.paid) return;
+
+    const n = parseInt(installmentPlanForm.numberOfInstallments);
+    if (n < 2) {
+      alert('Le nombre d\'échéances doit être au moins 2');
+      return;
+    }
+
+    let amounts = installmentPlanForm.installmentAmounts;
+    if (!amounts || amounts.length !== n) {
+      const def = Math.round((payment.amount / n) * 100) / 100;
+      const last = Math.round((payment.amount - def * (n - 1)) * 100) / 100;
+      amounts = [...Array(n - 1).fill(def), last];
+    }
+
+    const totalEntered = amounts.reduce((s, a) => s + a, 0);
+    const diff = Math.abs(totalEntered - payment.amount);
+    if (diff > 0.01) {
+      if (totalEntered > payment.amount) {
+        alert(`Le total des échéances (${formatPrice(totalEntered)}) dépasse le loyer (${formatPrice(payment.amount)}). Veuillez ajuster les montants.`);
+      } else {
+        alert(`Le total des échéances (${formatPrice(totalEntered)}) est inférieur au loyer (${formatPrice(payment.amount)}). Il reste ${formatPrice(payment.amount - totalEntered)} à répartir.`);
+      }
+      return;
+    }
+
+    setActionLoading(true);
+    try {
+      const { data: planData, error: planError } = await supabase
+        .from('payment_installment_plans')
+        .insert([{
+          payment_id: payment.id,
+          total_amount: payment.amount,
+          number_of_installments: n,
+        }])
+        .select()
+        .single();
+
+      if (planError) throw planError;
+
+      const installments = [];
+      const baseDate = new Date(payment.due_date);
+      for (let i = 0; i < n; i++) {
+        const dueDate = new Date(baseDate);
+        dueDate.setMonth(dueDate.getMonth() + i);
+        installments.push({
+          plan_id: planData.id,
+          installment_number: i + 1,
+          due_date: dueDate.toISOString().split('T')[0],
+          amount: Math.round(amounts[i] * 100) / 100,
+          status: 'pending',
+        });
+      }
+
+      const { error: instError } = await supabase
+        .from('payment_installment_payments')
+        .insert(installments);
+
+      if (instError) throw instError;
+
+      alert('Plan d\'échelonnement créé. Le locataire peut maintenant payer en plusieurs fois.');
+      setShowInstallmentPlanModal(false);
+      setInstallmentPlanForm({ paymentId: '', numberOfInstallments: '2', installmentAmounts: [] });
+      await loadRentPayments();
+    } catch (err: any) {
+      console.error('Erreur création plan échelonnement:', err);
+      alert(`Erreur: ${err.message || 'Erreur inconnue'}`);
     } finally {
       setActionLoading(false);
     }
@@ -1547,7 +1693,11 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
               <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Loyers impayés</h2>
               <div className="space-y-3">
                 {unpaidPayments.map((payment) => (
-                  <div key={payment.id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 p-4 sm:p-5 rounded-lg md:rounded-xl border-2 border-red-200 bg-red-50">
+                  <div
+                    key={payment.id}
+                    onClick={() => payment.installmentPlan && (setSelectedPaymentForDetail(payment), setShowInstallmentDetailModal(true))}
+                    className={`flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 p-4 sm:p-5 rounded-lg md:rounded-xl border-2 border-red-200 bg-red-50 ${payment.installmentPlan ? 'cursor-pointer hover:bg-red-100/80 transition-colors' : ''}`}
+                  >
                     <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
                       <div className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-red-100 flex-shrink-0">
                         <i className="ri-error-warning-line text-red-600 text-xl sm:text-2xl w-5 h-5 sm:w-6 sm:h-6 flex items-center justify-center"></i>
@@ -1555,30 +1705,62 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
                       <div className="min-w-0 flex-1">
                         <p className="font-medium text-sm sm:text-base text-gray-900 capitalize break-words">{payment.month}</p>
                         <p className="text-xs sm:text-sm text-gray-600 break-words">Échéance: {formatDate(payment.due_date)}</p>
+                        {payment.installmentPlan && (
+                          <p className="text-xs sm:text-sm text-amber-700 mt-1">
+                            Paiement échelonné • Reste: <strong>{formatPrice(payment.installmentPlan.remainingAmount)}</strong>
+                            {payment.installmentPlan.remainingAmount > 0 && (
+                              <span className="ml-1">• Cliquez pour voir le détail</span>
+                            )}
+                          </p>
+                        )}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 flex-shrink-0">
+                    <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3 flex-shrink-0 flex-wrap">
                       <span className="text-lg sm:text-xl font-bold text-gray-900 whitespace-nowrap">{formatPrice(payment.amount)}</span>
-                      <button
-                        onClick={() => {
-                          setMarkPaidForm({
-                            paymentId: payment.id,
-                            paidDate: new Date().toISOString().split('T')[0],
-                            paymentMethod: 'cash',
-                          });
-                          setShowMarkPaidModal(true);
-                        }}
-                        disabled={lease.status === 'terminated'}
-                        className={`px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 rounded-lg md:rounded-xl text-xs sm:text-sm md:text-base font-medium transition-colors cursor-pointer whitespace-nowrap ${
-                          lease.status === 'terminated'
-                            ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                            : 'bg-teal-600 text-white hover:bg-teal-700'
-                        }`}
-                        title={lease.status === 'terminated' ? 'Impossible de modifier un paiement pour un bail clôturé' : 'Marquer comme payé'}
-                      >
-                        <span className="hidden sm:inline">Marquer comme payé</span>
-                        <span className="sm:hidden">Marquer payé</span>
-                      </button>
+                      <div className="flex gap-2">
+                        {!payment.installmentPlan && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const n = 2;
+                              const defaultAmt = Math.round((payment.amount / n) * 100) / 100;
+                              const lastAmt = Math.round((payment.amount - defaultAmt * (n - 1)) * 100) / 100;
+                              setInstallmentPlanForm({
+                                paymentId: payment.id,
+                                numberOfInstallments: '2',
+                                installmentAmounts: [...Array(n - 1).fill(defaultAmt), lastAmt],
+                              });
+                              setShowInstallmentPlanModal(true);
+                            }}
+                            disabled={lease.status === 'terminated'}
+                            className="px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium bg-amber-100 text-amber-800 hover:bg-amber-200 transition-colors cursor-pointer whitespace-nowrap disabled:opacity-50"
+                            title="Autoriser le locataire à payer en plusieurs échéances"
+                          >
+                            Échelonner
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMarkPaidForm({
+                              paymentId: payment.id,
+                              paidDate: new Date().toISOString().split('T')[0],
+                              paymentMethod: 'cash',
+                            });
+                            setShowMarkPaidModal(true);
+                          }}
+                          disabled={lease.status === 'terminated'}
+                          className={`px-3 sm:px-4 md:px-5 py-2 sm:py-2.5 rounded-lg md:rounded-xl text-xs sm:text-sm md:text-base font-medium transition-colors cursor-pointer whitespace-nowrap ${
+                            lease.status === 'terminated'
+                              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                              : 'bg-teal-600 text-white hover:bg-teal-700'
+                          }`}
+                          title={lease.status === 'terminated' ? 'Impossible de modifier un paiement pour un bail clôturé' : 'Marquer comme payé'}
+                        >
+                          <span className="hidden sm:inline">Marquer comme payé</span>
+                          <span className="sm:hidden">Marquer payé</span>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -2039,6 +2221,155 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
                 {confirmationStep === 1 ? 'Continuer' : 'Confirmer définitivement'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Autoriser échelonnement */}
+      {showInstallmentPlanModal && (() => {
+        const payment = rentPayments.find((p) => p.id === installmentPlanForm.paymentId);
+        const n = Math.min(12, Math.max(2, parseInt(installmentPlanForm.numberOfInstallments) || 2));
+        const amounts = installmentPlanForm.installmentAmounts;
+        const needsRecalc = !amounts || amounts.length !== n;
+        const displayAmounts = needsRecalc
+          ? (() => {
+              const def = Math.round((payment?.amount ?? 0) / n * 100) / 100;
+              const last = Math.round(((payment?.amount ?? 0) - def * (n - 1)) * 100) / 100;
+              return [...Array(n - 1).fill(def), last];
+            })()
+          : amounts;
+        const totalEntered = displayAmounts.reduce((s, a) => s + (Number(a) || 0), 0);
+        const remaining = (payment?.amount ?? 0) - totalEntered;
+        const hasExceeded = remaining < -0.01;
+
+        const syncAmountsToForm = (newAmounts: number[]) => {
+          if (newAmounts.length === installmentPlanForm.installmentAmounts.length &&
+              newAmounts.every((v, i) => v === installmentPlanForm.installmentAmounts[i])) return;
+          setInstallmentPlanForm((f) => ({ ...f, installmentAmounts: newAmounts }));
+        };
+
+        return (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Autoriser le paiement en échéances</h3>
+              <button onClick={() => { setShowInstallmentPlanModal(false); setInstallmentPlanForm({ paymentId: '', numberOfInstallments: '2', installmentAmounts: [] }); }} className="text-gray-400 hover:text-gray-600">
+                <i className="ri-close-line text-2xl"></i>
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Le locataire pourra payer ce loyer en plusieurs fois. Définissez le montant de chaque échéance. Le loyer restera impayé tant que toutes les échéances ne sont pas réglées.
+            </p>
+            {payment && (
+              <p className="text-sm font-medium text-gray-800 mb-4">
+                Loyer total : <strong>{formatPrice(payment.amount)}</strong>
+              </p>
+            )}
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">Nombre d'échéances</label>
+              <input
+                type="number"
+                min="2"
+                max="12"
+                value={installmentPlanForm.numberOfInstallments}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setInstallmentPlanForm((f) => {
+                    const newN = Math.min(12, Math.max(2, parseInt(val) || 2));
+                    const def = payment ? Math.round((payment.amount / newN) * 100) / 100 : 0;
+                    const last = payment ? Math.round((payment.amount - def * (newN - 1)) * 100) / 100 : 0;
+                    return {
+                      ...f,
+                      numberOfInstallments: val,
+                      installmentAmounts: [...Array(newN - 1).fill(def), last],
+                    };
+                  });
+                }}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg"
+              />
+            </div>
+            {payment && n >= 2 && (
+              <div className="mb-4 space-y-3">
+                <label className="block text-sm font-medium text-gray-700">Montant de chaque échéance</label>
+                {displayAmounts.map((amt, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-sm text-gray-600 w-24">Échéance {i + 1}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="100"
+                      value={amt}
+                      onChange={(e) => {
+                        const v = parseFloat(e.target.value) || 0;
+                        const next = [...displayAmounts];
+                        next[i] = v;
+                        syncAmountsToForm(next);
+                      }}
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-lg"
+                    />
+                    <span className="text-sm text-gray-500">FCFA</span>
+                  </div>
+                ))}
+                <div className="mt-3 p-3 rounded-lg border-2 border-gray-200 bg-gray-50">
+                  <p className={`text-sm font-medium ${remaining > 0.01 ? 'text-amber-800' : hasExceeded ? 'text-red-700' : 'text-green-700'}`}>
+                    {remaining > 0.01 && <>Montant restant à répartir : <strong>{formatPrice(remaining)}</strong></>}
+                    {hasExceeded && <>Vous avez dépassé le montant du loyer de <strong>{formatPrice(-remaining)}</strong></>}
+                    {Math.abs(remaining) <= 0.01 && <>Total correct ({formatPrice(totalEntered)})</>}
+                  </p>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button onClick={() => { setShowInstallmentPlanModal(false); setInstallmentPlanForm({ paymentId: '', numberOfInstallments: '2', installmentAmounts: [] }); }} className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+                Annuler
+              </button>
+              <button
+                onClick={handleCreateInstallmentPlan}
+                disabled={actionLoading || !payment || hasExceeded || Math.abs(remaining) > 0.01}
+                className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {actionLoading ? 'Création...' : 'Créer le plan'}
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
+
+      {/* Modal Détail des échéances */}
+      {showInstallmentDetailModal && selectedPaymentForDetail?.installmentPlan && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => { setShowInstallmentDetailModal(false); setSelectedPaymentForDetail(null); }}>
+          <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Détail des échéances - {selectedPaymentForDetail.month}</h3>
+              <button onClick={() => { setShowInstallmentDetailModal(false); setSelectedPaymentForDetail(null); }} className="text-gray-400 hover:text-gray-600">
+                <i className="ri-close-line text-2xl"></i>
+              </button>
+            </div>
+            <div className="mb-4 p-3 bg-amber-50 rounded-lg">
+              <p className="text-sm font-medium text-amber-800">Montant restant à payer: {formatPrice(selectedPaymentForDetail.installmentPlan.remainingAmount)}</p>
+            </div>
+            <div className="space-y-2">
+              {selectedPaymentForDetail.installmentPlan.installments.map((inst) => (
+                <div key={inst.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200">
+                  <div>
+                    <span className="font-medium">Échéance {inst.installment_number}</span>
+                    <span className="text-sm text-gray-600 ml-2">- {formatDate(inst.due_date)}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{formatPrice(inst.amount)}</span>
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                      inst.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    }`}>
+                      {inst.status === 'paid' ? 'Payé' : 'En attente'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { setShowInstallmentDetailModal(false); setSelectedPaymentForDetail(null); }} className="mt-4 w-full px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
+              Fermer
+            </button>
           </div>
         </div>
       )}

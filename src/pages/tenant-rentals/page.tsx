@@ -126,7 +126,58 @@ export default function TenantRentalsPage() {
     console.log('   • Nouveau statut:', status);
     
     try {
-      // Récupérer les informations du paiement
+      // Vérifier si c'est une échéance (payment_installment_payments)
+      const { data: installmentData, error: installmentError } = await supabase
+        .from('payment_installment_payments')
+        .select('id, plan_id, amount')
+        .eq('id', paymentId)
+        .eq('status', 'pending')
+        .maybeSingle();
+
+      if (!installmentError && installmentData) {
+        // C'est une échéance - mettre à jour l'échéance
+        console.log(`🔄 Mise à jour de l'échéance ${paymentId}...`);
+        const paymentDate = new Date().toISOString().split('T')[0];
+        await supabase
+          .from('payment_installment_payments')
+          .update({
+            status: 'paid',
+            payment_date: paymentDate,
+            payment_method: 'stripe',
+          })
+          .eq('id', paymentId);
+
+        // Vérifier si toutes les échéances sont payées (après notre update)
+        const { data: allInstallments } = await supabase
+          .from('payment_installment_payments')
+          .select('id, status')
+          .eq('plan_id', installmentData.plan_id);
+
+        const nowAllPaid = allInstallments?.every((i: any) => i.status === 'paid') ?? false;
+        if (nowAllPaid) {
+          const { data: planRow } = await supabase
+            .from('payment_installment_plans')
+            .select('payment_id')
+            .eq('id', installmentData.plan_id)
+            .single();
+          if (planRow) {
+            await supabase
+              .from('payments')
+              .update({
+                status: 'paid',
+                payment_date: paymentDate,
+                payment_method: 'stripe',
+              })
+              .eq('id', planRow.payment_id);
+            console.log(`✅ Toutes les échéances payées - Paiement principal ${planRow.payment_id} marqué comme payé`);
+          }
+        }
+        // Recharger les locations pour mettre à jour l'affichage
+        await loadRentals();
+        return;
+      }
+
+      // Sinon, paiement de loyer classique
       console.log('📥 Récupération du paiement depuis Supabase...');
       const { data: paymentData, error: paymentError } = await supabase
         .from('payments')
@@ -578,12 +629,46 @@ export default function TenantRentalsPage() {
         if (paymentsError) {
           console.error('Erreur lors du chargement des paiements:', paymentsError);
         } else if (paymentsData) {
-          // Grouper les paiements par lease_id
           paymentsData.forEach((payment: any) => {
             if (!paymentsMap.has(payment.lease_id)) {
               paymentsMap.set(payment.lease_id, []);
             }
             paymentsMap.get(payment.lease_id).push(payment);
+          });
+        }
+      }
+
+      // Charger les plans d'échelonnement pour tous les paiements en attente
+      const allPayments = Array.from(paymentsMap.values()).flat();
+      const allPendingIds = allPayments.filter((p: any) => p.status === 'pending').map((p: any) => p.id);
+      const globalPlansMap = new Map<string, any>();
+      if (allPendingIds.length > 0) {
+        const { data: plansData } = await supabase
+          .from('payment_installment_plans')
+          .select('*')
+          .in('payment_id', allPendingIds);
+        if (plansData?.length) {
+          const planIds = plansData.map((pl: any) => pl.id);
+          const { data: instData } = await supabase
+            .from('payment_installment_payments')
+            .select('*')
+            .in('plan_id', planIds)
+            .order('installment_number', { ascending: true });
+          plansData.forEach((plan: any) => {
+            const installments = (instData || []).filter((ip: any) => ip.plan_id === plan.id);
+            const remaining = installments
+              .filter((ip: any) => ip.status !== 'paid')
+              .reduce((s: number, ip: any) => s + parseFloat(ip.amount), 0);
+            globalPlansMap.set(plan.payment_id, {
+              installments: installments.map((ip: any) => ({
+                id: ip.id,
+                installment_number: ip.installment_number,
+                due_date: ip.due_date,
+                amount: parseFloat(ip.amount),
+                status: ip.status,
+              })),
+              remainingAmount: remaining,
+            });
           });
         }
       }
@@ -609,19 +694,20 @@ export default function TenantRentalsPage() {
           });
         }
         
-        // Récupérer les paiements pour ce bail
         const payments = paymentsMap.get(lease.id) || [];
         const unpaidRents = payments
           .filter((p: any) => p.status === 'pending')
           .map((p: any) => {
             const paymentDate = new Date(p.due_date);
             const monthName = paymentDate.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+            const plan = globalPlansMap.get(p.id);
             return {
               id: p.id,
               month: monthName,
               amount: `${parseFloat(p.amount).toLocaleString('fr-FR')} FCFA`,
               dueDate: paymentDate.toLocaleDateString('fr-FR'),
               amountNumber: parseFloat(p.amount),
+              installmentPlan: plan,
             };
           });
         

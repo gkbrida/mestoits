@@ -211,15 +211,26 @@ export default async function handler(
             },
           });
 
-          // Mettre à jour le paiement avec la référence PayDunya
-          await supabaseAdmin
-            .from('payments')
-            .update({
-              transaction_id: referenceNumber,
-            })
-            .eq('id', paymentId);
+          // Vérifier si c'est une échéance (payment_installment_payments)
+          const { data: installmentRow } = await supabaseAdmin
+            .from('payment_installment_payments')
+            .select('id')
+            .eq('id', paymentId)
+            .maybeSingle();
 
-          console.log(`✅ Référence PayDunya stockée dans le paiement: ${paymentId}`);
+          if (installmentRow) {
+            await supabaseAdmin
+              .from('payment_installment_payments')
+              .update({ transaction_id: referenceNumber })
+              .eq('id', paymentId);
+            console.log(`✅ Référence PayDunya stockée dans l'échéance: ${paymentId}`);
+          } else {
+            await supabaseAdmin
+              .from('payments')
+              .update({ transaction_id: referenceNumber })
+              .eq('id', paymentId);
+            console.log(`✅ Référence PayDunya stockée dans le paiement: ${paymentId}`);
+          }
         } catch (error) {
           console.error('⚠️ Erreur lors du stockage de la référence:', error);
           // Ne pas bloquer la réponse si le stockage échoue
