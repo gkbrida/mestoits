@@ -298,86 +298,97 @@ export default function BienDetailPage() {
 
     if (paymentStatus === 'success' && reservationId) {
       console.log('✅ PAIEMENT RÉSERVATION RÉUSSI DÉTECTÉ');
-      console.log('📝 Détails de la réservation:');
-      console.log('   • Reservation ID:', reservationId);
+      console.log('📝 Détails de la réservation temporaire:', reservationId);
       
-      // Mettre à jour le statut de la réservation dans la base de données
       (async () => {
         try {
-          const { error: updateError } = await supabase
+          // 1. Récupérer la réservation temporaire
+          const { data: tempData, error: fetchError } = await supabase
+            .from('reservations_temp')
+            .select('property_id, owner_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount')
+            .eq('id', reservationId)
+            .single();
+
+          if (fetchError || !tempData) {
+            console.error('❌ Réservation temporaire introuvable:', fetchError);
+            alert('Le paiement a été effectué mais la réservation temporaire est introuvable. Veuillez contacter le support.');
+            return;
+          }
+
+          // 2. Insérer dans reservations (confirmée)
+          const { data: newReservation, error: insertError } = await supabase
             .from('reservations')
-            .update({
+            .insert([{
+              property_id: tempData.property_id,
+              owner_id: tempData.owner_id,
+              guest_name: tempData.guest_name,
+              guest_email: tempData.guest_email,
+              guest_phone: tempData.guest_phone || null,
+              start_date: tempData.start_date,
+              end_date: tempData.end_date,
+              nights: tempData.nights,
+              total_amount: tempData.total_amount,
               status: 'confirmed',
-            })
-            .eq('id', reservationId);
+            }])
+            .select('id')
+            .single();
 
-          if (updateError) {
-            console.error('❌ Erreur lors de la mise à jour de la réservation:', updateError);
-            alert('Le paiement a été effectué mais une erreur est survenue lors de la mise à jour de la réservation. Veuillez contacter le support.');
-          } else {
-            console.log('✅ Réservation mise à jour avec succès');
+          if (insertError || !newReservation) {
+            console.error('❌ Erreur lors de l\'insertion dans reservations:', insertError);
+            alert('Le paiement a été effectué mais une erreur est survenue. Veuillez contacter le support.');
+            return;
+          }
 
-            // Traiter la commission
-            try {
-              const { processCommission } = await import('../../utils/commissionUtils');
-              const { data: reservationData } = await supabase
-                .from('reservations')
-                .select('total_amount, guest_email')
-                .eq('id', reservationId)
-                .single();
+          // 3. Supprimer la réservation temporaire
+          await supabase.from('reservations_temp').delete().eq('id', reservationId);
 
-              if (reservationData) {
-                const { data: { user } } = await supabase.auth.getUser();
-                await processCommission(
-                  'reservation',
-                  reservationId,
-                  user?.id || null,
-                  parseFloat(reservationData.total_amount)
-                );
-              }
-            } catch (commissionError) {
-              console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
-              // Ne pas bloquer le processus si la commission échoue
-            }
+          const confirmedId = newReservation.id;
 
-            alert('✅ Réservation confirmée ! Votre paiement a été effectué avec succès.');
+          // Traiter la commission
+          try {
+            const { processCommission } = await import('../../utils/commissionUtils');
+            const { data: { user } } = await supabase.auth.getUser();
+            await processCommission(
+              'reservation',
+              confirmedId,
+              user?.id || null,
+              parseFloat(String(tempData.total_amount))
+            );
+          } catch (commissionError) {
+            console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+          }
 
-            // Envoyer un email au propriétaire pour l'informer de la confirmation de la réservation
-            try {
-              // Récupérer les informations de la réservation et du propriétaire
-              const { data: reservationData } = await supabase
-                .from('reservations')
-                .select('property_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount, owner_id')
-                .eq('id', reservationId)
-                .single();
+          alert('✅ Réservation confirmée ! Votre paiement a été effectué avec succès.');
 
-              if (reservationData) {
-                const { data: ownerData } = await supabase
-                  .from('users_2025_12_01_11_29')
-                  .select('full_name, email, phone')
-                  .eq('id', reservationData.owner_id)
-                  .single();
+          // Envoyer un email au propriétaire
+          try {
+            const reservationData = { ...tempData, id: confirmedId };
+            const { data: ownerData } = await supabase
+              .from('users_2025_12_01_11_29')
+              .select('full_name, email, phone')
+              .eq('id', reservationData.owner_id)
+              .single();
 
-                const { data: propertyData } = await supabase
-                  .from('properties_02')
-                  .select('title')
-                  .eq('id', reservationData.property_id)
-                  .single();
+            const { data: propertyData } = await supabase
+              .from('properties_02')
+              .select('title')
+              .eq('id', reservationData.property_id)
+              .single();
 
-                if (ownerData?.email) {
-                  const formatDate = (dateString: string) => {
-                    return new Date(dateString).toLocaleDateString('fr-FR', {
-                      day: 'numeric',
-                      month: 'long',
-                      year: 'numeric',
-                    });
-                  };
+            if (ownerData?.email) {
+              const formatDate = (dateString: string) => {
+                return new Date(dateString).toLocaleDateString('fr-FR', {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                });
+              };
 
-                  const formatPrice = (amount: number) => {
-                    return new Intl.NumberFormat('fr-FR').format(amount);
-                  };
+              const formatPrice = (amount: number) => {
+                return new Intl.NumberFormat('fr-FR').format(amount);
+              };
 
-                  const confirmationMessage = `Bonjour ${ownerData.full_name || 'Propriétaire'},
+              const confirmationMessage = `Bonjour ${ownerData.full_name || 'Propriétaire'},
 
 La réservation pour votre bien "${propertyData?.title || 'Bien immobilier'}" a été confirmée suite au paiement effectué.
 
@@ -395,23 +406,20 @@ La réservation est maintenant confirmée et le paiement a été reçu.
 Cordialement,
 L'équipe Mestoits`;
 
-                  await sendEmail('contact_annonce', {
-                    receiverEmail: ownerData.email,
-                    receiverName: ownerData.full_name || 'Propriétaire',
-                    senderName: reservationData.guest_name,
-                    senderEmail: reservationData.guest_email,
-                    senderPhone: reservationData.guest_phone,
-                    propertyTitle: propertyData?.title || 'Bien immobilier',
-                    propertyId: reservationData.property_id,
-                    message: confirmationMessage,
-                    appUrl: window.location.origin,
-                  });
-                }
-              }
-            } catch (emailError) {
-              console.error('⚠️ Erreur lors de l\'envoi de l\'email de confirmation au propriétaire:', emailError);
-              // Ne pas bloquer le processus si l'email échoue
+              await sendEmail('contact_annonce', {
+                receiverEmail: ownerData.email,
+                receiverName: ownerData.full_name || 'Propriétaire',
+                senderName: reservationData.guest_name,
+                senderEmail: reservationData.guest_email,
+                senderPhone: reservationData.guest_phone,
+                propertyTitle: propertyData?.title || 'Bien immobilier',
+                propertyId: reservationData.property_id,
+                message: confirmationMessage,
+                appUrl: window.location.origin,
+              });
             }
+          } catch (emailError) {
+            console.error('⚠️ Erreur lors de l\'envoi de l\'email de confirmation au propriétaire:', emailError);
           }
         } catch (error) {
           console.error('❌ Erreur lors de la mise à jour de la réservation:', error);

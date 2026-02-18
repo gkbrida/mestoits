@@ -142,80 +142,86 @@ export default async function handler(
         paymentId = paymentData.id;
         console.log(`✅ Paiement trouvé par référence: ${paymentId}`);
       } else {
-        // Chercher la réservation par notes (où on stocke la référence PayDunya)
-        const { data: reservationData } = await supabaseAdmin
-          .from('reservations')
+        const { data: tempData } = await supabaseAdmin
+          .from('reservations_temp')
           .select('id')
           .like('notes', `%Référence PayDunya: ${referenceNumber}%`)
-          .eq('status', 'pending')
           .maybeSingle();
 
-        if (reservationData) {
-          reservationId = reservationData.id;
-          console.log(`✅ Réservation trouvée par référence: ${reservationId}`);
+        if (tempData) {
+          reservationId = tempData.id;
+          console.log(`✅ Réservation temporaire trouvée par référence: ${reservationId}`);
         }
       }
     }
 
-    // Traiter selon le type de paiement
     if (paymentType === 'reservation_payment' && reservationId) {
-      // Mettre à jour la réservation
-      console.log(`🔄 Mise à jour de la réservation ${reservationId}...`);
-      
-      const { error: updateError } = await supabaseAdmin
-        .from('reservations')
-        .update({
-          status: 'confirmed',
-          notes: `Référence PayDunya: ${referenceNumber} - Paiement confirmé le ${new Date().toISOString()}`,
-        })
-        .eq('id', reservationId);
+      console.log(`🔄 Transfert réservation_temp ${reservationId} → reservations...`);
 
-      if (updateError) {
-        console.error('❌ Erreur lors de la mise à jour de la réservation:', updateError);
+      const { data: tempData, error: fetchError } = await supabaseAdmin
+        .from('reservations_temp')
+        .select('property_id, owner_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount')
+        .eq('id', reservationId)
+        .single();
+
+      if (fetchError || !tempData) {
+        console.error('❌ Réservation temporaire introuvable:', fetchError);
         return res.status(500).json({
           success: false,
-          error: 'Erreur lors de la mise à jour de la réservation'
+          error: 'Réservation temporaire introuvable'
         });
       }
 
-      console.log(`✅ Réservation ${reservationId} mise à jour avec succès`);
+      const { data: newReservation, error: insertError } = await supabaseAdmin
+        .from('reservations')
+        .insert([{
+          property_id: tempData.property_id,
+          owner_id: tempData.owner_id,
+          guest_name: tempData.guest_name,
+          guest_email: tempData.guest_email,
+          guest_phone: tempData.guest_phone || null,
+          start_date: tempData.start_date,
+          end_date: tempData.end_date,
+          nights: tempData.nights,
+          total_amount: tempData.total_amount,
+          status: 'confirmed',
+          notes: `Référence PayDunya: ${referenceNumber} - Paiement confirmé le ${new Date().toISOString()}`,
+        }])
+        .select('id')
+        .single();
 
-      // Traiter la commission
-      try {
-        const { data: reservationData } = await supabaseAdmin
-          .from('reservations')
-          .select('total_amount, guest_email')
-          .eq('id', reservationId)
-          .single();
-
-        if (reservationData) {
-          const { data: guestUser } = await supabaseAdmin
-            .from('users_2025_12_01_11_29')
-            .select('id')
-            .eq('email', reservationData.guest_email)
-            .maybeSingle();
-
-          const { processCommission } = await import('./utils/commissionHandler');
-          await processCommission(
-            'reservation',
-            reservationId,
-            guestUser?.id || null,
-            parseFloat(reservationData.total_amount)
-          );
-        }
-      } catch (commissionError) {
-        console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
-        // Ne pas bloquer le callback si la commission échoue
+      if (insertError || !newReservation) {
+        console.error('❌ Erreur insertion reservations:', insertError);
+        return res.status(500).json({
+          success: false,
+          error: 'Erreur lors de la création de la réservation'
+        });
       }
 
-      // Envoyer un email au propriétaire pour l'informer de la confirmation de la réservation
+      await supabaseAdmin.from('reservations_temp').delete().eq('id', reservationId);
+      const confirmedId = newReservation.id;
+      console.log(`✅ Réservation ${confirmedId} créée avec succès`);
+
       try {
-        // Récupérer les informations de la réservation et du propriétaire
-        const { data: reservationData } = await supabaseAdmin
-          .from('reservations')
-          .select('property_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount, owner_id')
-          .eq('id', reservationId)
-          .single();
+        const { data: guestUser } = await supabaseAdmin
+          .from('users_2025_12_01_11_29')
+          .select('id')
+          .eq('email', tempData.guest_email)
+          .maybeSingle();
+
+        const { processCommission } = await import('./utils/commissionHandler');
+        await processCommission(
+          'reservation',
+          confirmedId,
+          guestUser?.id || null,
+          parseFloat(String(tempData.total_amount))
+        );
+      } catch (commissionError) {
+        console.error('⚠️ Erreur lors du traitement de la commission:', commissionError);
+      }
+
+      try {
+        const reservationData = { ...tempData, id: confirmedId };
 
         if (reservationData) {
           const { data: ownerData } = await supabaseAdmin

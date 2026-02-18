@@ -373,6 +373,7 @@ export default function AgendaPage() {
             owner_id
           `)
           .or(reservationFilter)
+          .in('status', ['pending', 'confirmed', 'completed'])
           .gte('start_date', startOfMonth.toISOString().split('T')[0])
           .lte('start_date', endOfMonth.toISOString().split('T')[0]);
 

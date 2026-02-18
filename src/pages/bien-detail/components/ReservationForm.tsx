@@ -37,21 +37,21 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
   // À l’arrivée sur la page (ex. après rafraîchissement), annuler les réservations pending non payées de l’utilisateur
   useEffect(() => {
     if (!propertyId || !userData?.email) return;
-    const cancelOrphanedPending = async () => {
+    const deleteOrphanedTemp = async () => {
       try {
         await supabase
-          .from('reservations')
-          .update({ status: 'cancelled' })
+          .from('reservations_temp')
+          .delete()
           .eq('property_id', propertyId)
-          .eq('guest_email', userData.email)
-          .eq('status', 'pending');
+          .eq('guest_email', userData.email);
         await loadUnavailableDates();
       } catch (e) {
-        console.error('Erreur lors de l\'annulation des réservations orphelines:', e);
+        console.error('Erreur lors de la suppression des réservations temporaires orphelines:', e);
       }
     };
-    cancelOrphanedPending();
+    deleteOrphanedTemp();
   }, [propertyId, userData?.email]);
+
 
   // Rafraîchir l'état d'expiration toutes les 30s quand le modal de paiement est ouvert
   useEffect(() => {
@@ -104,42 +104,46 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
 
   const loadUnavailableDates = async () => {
     try {
-      // Charger les réservations en attente et confirmées pour ce bien
-      const { data: reservations, error } = await supabase
-        .from('reservations')
-        .select('start_date, end_date, status, created_at')
-        .eq('property_id', propertyId)
-        .in('status', ['pending', 'confirmed']);
+      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+      const dates: string[] = [];
 
-      if (error) {
-        console.error('Erreur lors du chargement des réservations:', error);
-        return;
+      // 1. Réservations confirmées (table reservations)
+      const { data: confirmedReservations, error: err1 } = await supabase
+        .from('reservations')
+        .select('start_date, end_date')
+        .eq('property_id', propertyId)
+        .eq('status', 'confirmed');
+      if (!err1 && confirmedReservations) {
+        confirmedReservations.forEach((r: any) => {
+          const start = new Date(r.start_date);
+          const end = new Date(r.end_date);
+          const currentDate = new Date(start);
+          while (currentDate <= end) {
+            dates.push(currentDate.toISOString().split('T')[0]);
+            currentDate.setDate(currentDate.getDate() + 1);
+          }
+        });
       }
 
-      // Les réservations "pending" non payées après 15 min sont libérées
-      const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
-      const validReservations = (reservations || []).filter((r: any) => {
-        if (r.status === 'confirmed') return true;
-        if (r.status === 'pending' && r.created_at) {
-          return new Date(r.created_at) > fifteenMinutesAgo;
-        }
-        return true; // par défaut, inclure
-      });
+      // 2. Réservations temporaires (table reservations_temp) < 15 min
+      const { data: tempReservations, error: err2 } = await supabase
+        .from('reservations_temp')
+        .select('start_date, end_date, created_at')
+        .eq('property_id', propertyId);
+      if (!err2 && tempReservations) {
+        tempReservations
+          .filter((r: any) => r.created_at && new Date(r.created_at) > fifteenMinutesAgo)
+          .forEach((r: any) => {
+            const start = new Date(r.start_date);
+            const end = new Date(r.end_date);
+            const currentDate = new Date(start);
+            while (currentDate <= end) {
+              dates.push(currentDate.toISOString().split('T')[0]);
+              currentDate.setDate(currentDate.getDate() + 1);
+            }
+          });
+      }
 
-      // Extraire toutes les dates entre start_date et end_date pour chaque réservation
-      const dates: string[] = [];
-      validReservations.forEach((reservation: any) => {
-        const start = new Date(reservation.start_date);
-        const end = new Date(reservation.end_date);
-        const currentDate = new Date(start);
-        
-        while (currentDate <= end) {
-          dates.push(currentDate.toISOString().split('T')[0]);
-          currentDate.setDate(currentDate.getDate() + 1);
-        }
-      });
-
-      // Supprimer les doublons
       setUnavailableDates([...new Set(dates)]);
     } catch (error) {
       console.error('Erreur lors du chargement des dates indisponibles:', error);
@@ -227,10 +231,10 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
         throw new Error('Impossible de déterminer le propriétaire du bien');
       }
 
-      // Créer la réservation dans Supabase
+      // Créer la réservation temporaire (avant paiement)
       const totalAmount = calculateTotal();
       const { data: reservationData, error: reservationError } = await supabase
-        .from('reservations')
+        .from('reservations_temp')
         .insert([{
           property_id: propertyId,
           owner_id: finalOwnerId,
@@ -241,7 +245,6 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
           end_date: endDate,
           nights: nights,
           total_amount: totalAmount,
-          status: 'pending'
         }])
         .select()
         .single();
@@ -326,11 +329,11 @@ L'équipe Mestoits`;
     if (selectedReservation?.id) {
       try {
         await supabase
-          .from('reservations')
-          .update({ status: 'cancelled' })
+          .from('reservations_temp')
+          .delete()
           .eq('id', selectedReservation.id);
       } catch (e) {
-        console.error('Erreur lors de l\'annulation de la réservation:', e);
+        console.error('Erreur lors de la suppression de la réservation temporaire:', e);
       }
       await loadUnavailableDates();
     }

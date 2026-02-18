@@ -98,20 +98,14 @@ export default async function handler(
       if (supabaseUrl && supabaseServiceKey) {
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
         const { data: reservation, error: resError } = await supabase
-          .from('reservations')
-          .select('id, status, created_at')
+          .from('reservations_temp')
+          .select('id, created_at')
           .eq('id', reservationId)
           .single();
         if (resError || !reservation) {
           return res.status(400).json({
             success: false,
             error: 'Réservation introuvable ou invalide.'
-          });
-        }
-        if (reservation.status !== 'pending') {
-          return res.status(400).json({
-            success: false,
-            error: 'Cette réservation n\'est plus disponible pour le paiement (délai dépassé ou déjà traitée).'
           });
         }
         const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);

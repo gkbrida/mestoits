@@ -2,10 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
 /**
- * Cron job pour expirer les réservations en attente de paiement (> 15 min)
+ * Cron job pour supprimer les réservations temporaires expirées (> 15 min)
  * Libère les plages de dates pour d'autres clients
  *
- * Configuration dans vercel.json - exécution toutes les 15 minutes.
+ * Configuration dans vercel.json - exécution via cron-temps-reel toutes les 5 min.
  */
 
 export default async function handler(
@@ -43,33 +43,32 @@ export default async function handler(
     const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 
     const { data: expiredReservations, error: fetchError } = await supabase
-      .from('reservations')
+      .from('reservations_temp')
       .select('id, guest_email, start_date, end_date, created_at')
-      .eq('status', 'pending')
       .lt('created_at', fifteenMinutesAgo);
 
     if (fetchError) {
-      console.error('Erreur fetch réservations expirées:', fetchError);
+      console.error('Erreur fetch réservations_temp expirées:', fetchError);
       return res.status(500).json({ error: fetchError.message });
     }
 
     if (!expiredReservations || expiredReservations.length === 0) {
-      return res.status(200).json({ expired: 0, message: 'Aucune réservation à expirer' });
+      return res.status(200).json({ expired: 0, message: 'Aucune réservation temporaire à expirer' });
     }
 
     const ids = expiredReservations.map((r: any) => r.id);
 
-    const { error: updateError } = await supabase
-      .from('reservations')
-      .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+    const { error: deleteError } = await supabase
+      .from('reservations_temp')
+      .delete()
       .in('id', ids);
 
-    if (updateError) {
-      console.error('Erreur expiration réservations:', updateError);
-      return res.status(500).json({ error: updateError.message });
+    if (deleteError) {
+      console.error('Erreur suppression réservations expirées:', deleteError);
+      return res.status(500).json({ error: deleteError.message });
     }
 
-    console.log(`✅ ${ids.length} réservation(s) expirée(s) et libérée(s)`);
+    console.log(`✅ ${ids.length} réservation(s) expirée(s) supprimée(s)`);
     return res.status(200).json({ expired: ids.length });
   } catch (error: any) {
     console.error('Erreur cron-expire-pending-reservations:', error);

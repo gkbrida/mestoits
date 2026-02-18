@@ -102,6 +102,7 @@ export default function DashboardTab() {
           .from('reservations')
           .select('id, property_id')
           .eq('owner_id', userId)
+          .in('status', ['pending', 'confirmed', 'completed'])
           .then(result => {
             if (result.error && result.error.message?.includes('does not exist')) {
               return { data: [], error: null };
@@ -235,6 +236,7 @@ export default function DashboardTab() {
           .from('reservations')
           .select('id, guest_name, total_amount, start_date, end_date, created_at, property_id')
           .eq('owner_id', userId)
+          .in('status', ['pending', 'confirmed', 'completed'])
           .in('property_id', shortTermRentalPropertyIds.length > 0 ? shortTermRentalPropertyIds : ['00000000-0000-0000-0000-000000000000'])
           .order('created_at', { ascending: false })
           .limit(5)

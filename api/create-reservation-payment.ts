@@ -86,20 +86,14 @@ export default async function handler(
       if (supabaseUrl && supabaseServiceKey) {
         const supabase = createClient(supabaseUrl, supabaseServiceKey);
         const { data: reservation, error: resError } = await supabase
-          .from('reservations')
-          .select('id, status, created_at')
+          .from('reservations_temp')
+          .select('id, created_at')
           .eq('id', reservationId)
           .single();
         if (resError || !reservation) {
           return res.status(400).json({
             success: false,
             error: 'Réservation introuvable ou invalide.'
-          });
-        }
-        if (reservation.status !== 'pending') {
-          return res.status(400).json({
-            success: false,
-            error: 'Cette réservation n\'est plus disponible pour le paiement (délai dépassé ou déjà traitée).'
           });
         }
         const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
@@ -247,10 +241,8 @@ export default async function handler(
             },
           });
 
-          // Mettre à jour la réservation avec la référence PayDunya (si un champ existe pour ça)
-          // Pour l'instant, on peut stocker dans notes ou créer un champ transaction_id
           await supabaseAdmin
-            .from('reservations')
+            .from('reservations_temp')
             .update({
               notes: `Référence PayDunya: ${referenceNumber}`,
             })

@@ -86,10 +86,11 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
         throw error;
       }
 
-      // Filtrer pour ne garder que les réservations liées aux biens en location courte durée
+      // Filtrer : biens courte durée + exclure les réservations qui n'ont pas abouti (cancelled)
       const shortTermRentalPropertyIds = properties.map(p => p.id);
-      const filteredReservations = (data || []).filter(reservation => 
-        shortTermRentalPropertyIds.includes(reservation.property_id)
+      const filteredReservations = (data || []).filter((reservation: any) => 
+        shortTermRentalPropertyIds.includes(reservation.property_id) &&
+        ['pending', 'confirmed', 'completed'].includes(reservation.status)
       );
 
       // Enrichir avec les détails des propriétés

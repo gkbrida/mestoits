@@ -76,11 +76,12 @@ export default function MesReservationsPage() {
     try {
       setLoading(true);
       
-      // Charger les réservations où l'utilisateur est le guest
+      // Charger uniquement les réservations confirmées ou complétées (les pending sont dans reservations_temp)
       const { data: reservationsData, error } = await supabase
         .from('reservations')
         .select('*')
         .eq('guest_email', userEmail)
+        .in('status', ['confirmed', 'completed'])
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -223,14 +224,14 @@ export default function MesReservationsPage() {
 
     setCancelling(true);
     try {
-      // Mettre à jour le statut de la réservation
-      const { error: updateError } = await supabase
+      // Supprimer la réservation (n'a pas abouti)
+      const { error: deleteError } = await supabase
         .from('reservations')
-        .update({ status: 'cancelled' })
+        .delete()
         .eq('id', selectedReservation.id);
 
-      if (updateError) {
-        throw updateError;
+      if (deleteError) {
+        throw deleteError;
       }
 
       // Envoyer un email au propriétaire pour l'informer de l'annulation
@@ -418,18 +419,6 @@ L'équipe Mestoits`,
                         <i className="ri-file-download-line text-sm sm:text-base"></i>
                         <span>Télécharger le récépissé</span>
                       </button>
-                      {reservation.status === 'pending' && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelReservation(reservation);
-                          }}
-                          className="px-3 sm:px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
-                        >
-                          <i className="ri-close-line text-sm sm:text-base"></i>
-                          <span>Annuler</span>
-                        </button>
-                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
