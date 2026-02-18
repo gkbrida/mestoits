@@ -1,7 +1,10 @@
 /**
  * Utilitaire pour générer un PDF du contrat de bail
  * Utilise la fonctionnalité native d'impression du navigateur
+ * Articles 1 à 17 modifiables (contract_articles)
  */
+
+import { getArticleContent, ARTICLE_TITLES } from './leaseContractArticles';
 
 interface LeaseData {
   id: string;
@@ -24,12 +27,7 @@ interface LeaseData {
   security_deposit: number;
   advance_rent_amount?: number | null;
   payment_due_day?: number | null;
-  article5?: string | null;
-  article6?: string | null;
-  article7?: string | null;
-  article8?: string | null;
-  article9?: string | null;
-  article10?: string | null;
+  contract_articles?: Record<string, string> | null;
   additional_notes?: string | null;
   signed_at?: string | null;
   created_at?: string;
@@ -59,14 +57,59 @@ export function generateLeasePDF(leaseData: LeaseData): void {
     }
   };
 
-  const articles = [
-    { num: 1, label: 'État des lieux', content: leaseData.article5 },
-    { num: 2, label: 'Obligations du locataire', content: leaseData.article6 },
-    { num: 3, label: 'Obligations du bailleur', content: leaseData.article7 },
-    { num: 4, label: 'Paiement du loyer', content: leaseData.article8 },
-    { num: 5, label: 'Travaux et modifications', content: leaseData.article9 },
-    { num: 6, label: 'Résiliation du bail', content: leaseData.article10 },
-  ].filter(article => article.content);
+  const paymentDueDay = leaseData.payment_due_day ?? 5;
+  const advanceAmount = leaseData.advance_rent_amount != null
+    ? formatPrice(leaseData.advance_rent_amount)
+    : '0 FCFA';
+  const depositAmount = formatPrice(leaseData.security_deposit);
+  const monthlyRentFormatted = formatPrice(leaseData.monthly_rent);
+
+  const durationYears =
+    leaseData.start_date && leaseData.end_date
+      ? (() => {
+          const d1 = new Date(leaseData.start_date);
+          const d2 = new Date(leaseData.end_date);
+          const years = Math.round(
+            (d2.getTime() - d1.getTime()) / (365.25 * 24 * 60 * 60 * 1000)
+          );
+          return years >= 1 ? `${years} an(s)` : '1 an';
+        })()
+      : '—';
+
+  const consistanceParts = [
+    leaseData.property_rooms != null ? `${leaseData.property_rooms} pièce(s)` : '',
+    leaseData.property_surface_area != null ? `${leaseData.property_surface_area} m²` : '',
+  ].filter(Boolean);
+  const consistance = consistanceParts.length > 0 ? consistanceParts.join(', ') : leaseData.property_title || '—';
+  const equipments = leaseData.additional_notes || 'Non précisé';
+
+  const contractArticles = leaseData.contract_articles || {};
+  const replacements = {
+    property_address: leaseData.property_address || '—',
+    property_city: leaseData.property_city ? `, ${leaseData.property_city}` : '',
+    consistance,
+    equipments,
+    duration_years: durationYears,
+    start_date: formatDate(leaseData.start_date),
+    monthly_rent: monthlyRentFormatted,
+    payment_due_day: String(paymentDueDay),
+    advance_amount: advanceAmount,
+    deposit_amount: depositAmount,
+  };
+
+  const articlesHtml = ([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17] as const)
+    .map((num) => {
+      const customText = contractArticles[String(num)];
+      const content = getArticleContent(num, customText, replacements);
+      if (!content) return '';
+      const escaped = content.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+      return `<div class="article">
+        <div class="article-title">ARTICLE ${num} : ${ARTICLE_TITLES[num]}</div>
+        <div class="article-content">${escaped}</div>
+      </div>`;
+    })
+    .filter(Boolean)
+    .join('\n');
 
   const htmlContent = `
 <!DOCTYPE html>
@@ -269,17 +312,10 @@ export function generateLeasePDF(leaseData: LeaseData): void {
     </div>` : ''}
   </div>
 
-  ${articles.length > 0 ? `
   <div class="section">
-    <div class="section-title">ARTICLES DU CONTRAT</div>
-    ${articles.map(article => `
-      <div class="article">
-        <div class="article-title">Article ${article.num} - ${article.label}</div>
-        <div class="article-content">${article.content}</div>
-      </div>
-    `).join('')}
+    <div class="section-title">ARTICLES DU CONTRAT (Code de la Construction et de l'Habitat - Art. 408 et suivants)</div>
+    ${articlesHtml}
   </div>
-  ` : ''}
 
   ${leaseData.additional_notes ? `
   <div class="section">

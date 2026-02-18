@@ -23,32 +23,12 @@
   ],
   "crons": [
     {
-      "path": "/api/cron-expire-pending-reservations",
-      "schedule": "*/15 * * * *"
+      "path": "/api/cron-temps-reel",
+      "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron-rent-payment-reminder",
-      "schedule": "33 19 * * *"
-    },
-    {
-      "path": "/api/cron-installment-payment-reminder",
-      "schedule": "00 18 * * *"
-    },
-    {
-      "path": "/api/cron-reservation-reminder",
-      "schedule": "00 17 * * *"
-    },
-    {
-      "path": "/api/cron-lease-expiration-reminder",
-      "schedule": "39 19 * * *"
-    },
-    {
-      "path": "/api/cron-lease-auto-renewal",
-      "schedule": "52 18 * * *"
-    },
-    {
-      "path": "/api/cron-subscription-renewal-reminder",
-      "schedule": "0 4 * * *"
+      "path": "/api/cron-journalier",
+      "schedule": "0 8 * * *"
     }
   ]
 }

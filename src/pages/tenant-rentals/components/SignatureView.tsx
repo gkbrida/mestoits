@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { useEmail } from '../../../hooks/useEmail';
+import LeaseContractPreview from '../../../components/LeaseContractPreview';
 
 interface SignatureViewProps {
   rental: any;
@@ -17,6 +18,7 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
   const [leaseDetails, setLeaseDetails] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [tenantEmail, setTenantEmail] = useState<string>('');
+  const [locataireLuEtApprouve, setLocataireLuEtApprouve] = useState(false);
 
   // Charger les détails complets du bail depuis Supabase
   useEffect(() => {
@@ -64,9 +66,9 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
       if (leaseData.tenant_id) {
         const { data: tenantInfo, error: tenantError } = await supabase
           .from('tenants')
-          .select('id, email, first_name, last_name')
+          .select('id, email, first_name, last_name, profession, identity_document')
           .eq('id', leaseData.tenant_id)
-          .maybeSingle(); // Utiliser maybeSingle() au lieu de single() pour éviter l'erreur si aucune ligne
+          .maybeSingle();
 
         if (tenantError) {
           console.error('Erreur lors du chargement du locataire:', tenantError);
@@ -77,11 +79,30 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
         }
       }
 
+      // Charger les informations du propriétaire
+      let ownerData = null;
+      if (leaseData.owner_id) {
+        const { data: ownerInfo, error: ownerError } = await supabase
+          .from('users_2025_12_01_11_29')
+          .select('full_name, company_address, phone, email')
+          .eq('id', leaseData.owner_id)
+          .maybeSingle();
+
+        if (ownerError) {
+          console.error('Erreur lors du chargement du propriétaire:', ownerError);
+        } else if (ownerInfo) {
+          ownerData = ownerInfo;
+        } else {
+          console.warn('Propriétaire non trouvé pour owner_id:', leaseData.owner_id);
+        }
+      }
+
       // Fusionner les données
       setLeaseDetails({
         ...leaseData,
         properties: propertyData,
-        tenants: tenantData
+        tenants: tenantData,
+        owner: ownerData
       });
       
       setTenantEmail(tenantData?.email || '');
@@ -267,107 +288,51 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
         </div>
       </div>
 
-      {/* Contract Preview */}
+      {/* Contract Preview - Contrat de bail à usage d'habitation (Art. 408 et suivants) */}
       <div className="bg-white rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 shadow-sm">
-        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Contrat de location</h2>
-        
-        <div className="bg-gray-50 rounded-lg md:rounded-xl p-4 sm:p-6 mb-4 sm:mb-6 max-h-80 sm:max-h-96 overflow-y-auto">
-          <div className="space-y-4 text-sm text-gray-700">
-            <p className="font-bold text-lg text-gray-900">CONTRAT DE LOCATION</p>
-            
-            <div>
-              <p className="font-bold text-gray-900 mb-2">Article 1 - Objet du contrat</p>
-              <p>Le présent contrat a pour objet la location du bien suivant :</p>
-              <p className="ml-4 mt-2">
-                <strong>Adresse :</strong> {rental.address}<br />
-                <strong>Type :</strong> {rental.type}<br />
-                <strong>Surface :</strong> {rental.surface}
-              </p>
-            </div>
+        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Contrat de bail à usage d&apos;habitation</h2>
+        <LeaseContractPreview
+          data={{
+            owner: leaseDetails?.owner || undefined,
+            tenant: leaseDetails?.tenants || undefined,
+            property: leaseDetails?.properties
+              ? { ...leaseDetails.properties, address: rental.address || leaseDetails.properties.address }
+              : { address: rental.address, city: rental.city } as any,
+            lease: {
+              start_date: rental.start_date || leaseDetails?.start_date,
+              end_date: rental.end_date || leaseDetails?.end_date,
+              monthly_rent: rental.rent ?? leaseDetails?.monthly_rent,
+              security_deposit: rental.security_deposit ?? leaseDetails?.security_deposit,
+              advance_rent_amount: leaseDetails?.advance_rent_amount ?? 0,
+              payment_due_day: leaseDetails?.payment_due_day ?? 5,
+              additional_notes: leaseDetails?.additional_notes,
+              contract_articles: leaseDetails?.contract_articles || undefined,
+            },
+          }}
+          className="mb-4 sm:mb-6"
+          showLocataireLuEtApprouve={locataireLuEtApprouve}
+        />
 
-            <div>
-              <p className="font-bold text-gray-900 mb-2">Article 2 - Durée du bail</p>
-              <p>Le bail est conclu pour une durée déterminée :</p>
-              <p className="ml-4 mt-2">
-                <strong>Date de début :</strong> {rental.start_date ? new Date(rental.start_date).toLocaleDateString('fr-FR') : 'N/A'}<br />
-                <strong>Date de fin :</strong> {rental.end_date ? new Date(rental.end_date).toLocaleDateString('fr-FR') : 'N/A'}
-              </p>
-            </div>
-
-            <div>
-              <p className="font-bold text-gray-900 mb-2">Article 3 - Loyer</p>
-              <p>Le loyer mensuel est fixé à <strong>{rental.rent}</strong>, charges comprises.</p>
-              <p className="mt-2">Le loyer est payable le 5 de chaque mois par virement bancaire.</p>
-            </div>
-
-            <div>
-              <p className="font-bold text-gray-900 mb-2">Article 4 - Dépôt de garantie</p>
-              <p>Un dépôt de garantie d'un montant de <strong>{rental.security_deposit ? `${rental.security_deposit.toLocaleString('fr-FR')} FCFA` : 'non spécifié'}</strong> est versé à la signature du présent contrat.</p>
-            </div>
-
-            {leaseDetails?.article5 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 5</p>
-                <p>{leaseDetails.article5}</p>
-              </div>
-            )}
-
-            {leaseDetails?.article6 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 6</p>
-                <p>{leaseDetails.article6}</p>
-              </div>
-            )}
-
-            {leaseDetails?.article7 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 7</p>
-                <p>{leaseDetails.article7}</p>
-              </div>
-            )}
-
-            {leaseDetails?.article8 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 8</p>
-                <p>{leaseDetails.article8}</p>
-              </div>
-            )}
-
-            {leaseDetails?.article9 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 9</p>
-                <p>{leaseDetails.article9}</p>
-              </div>
-            )}
-
-            {leaseDetails?.article10 && (
-              <div>
-                <p className="font-bold text-gray-900 mb-2">Article 10</p>
-                <p>{leaseDetails.article10}</p>
-              </div>
-            )}
-
-            {leaseDetails?.additional_notes && (
-              <div className="pt-4 border-t border-gray-300">
-                <p className="font-bold text-gray-900 mb-2">Notes additionnelles</p>
-                <p>{leaseDetails.additional_notes}</p>
-              </div>
-            )}
-
-            <div className="pt-4 border-t border-gray-300">
-              <p className="text-xs text-gray-600">
-                Fait en deux exemplaires originaux<br />
-                À Abidjan, le {new Date().toLocaleDateString('fr-FR')}
-              </p>
-            </div>
-          </div>
+        <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg md:rounded-xl mb-4 sm:mb-6">
+          <input
+            type="checkbox"
+            id="locataire-lu-approuve"
+            checked={locataireLuEtApprouve}
+            onChange={(e) => setLocataireLuEtApprouve(e.target.checked)}
+            className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500 cursor-pointer"
+          />
+          <label htmlFor="locataire-lu-approuve" className="text-sm text-gray-800 cursor-pointer select-none">
+            Je déclare avoir lu et approuvé le présent contrat de bail.
+          </label>
         </div>
 
         <div className="bg-blue-50 border-2 border-blue-200 rounded-lg md:rounded-xl p-3 sm:p-4 mb-4 sm:mb-6">
           <div className="flex gap-2 sm:gap-3">
             <i className="ri-information-line text-blue-600 text-lg sm:text-xl w-4 h-4 sm:w-5 sm:h-5 flex items-center justify-center flex-shrink-0 mt-0.5"></i>
             <p className="text-xs sm:text-sm text-blue-900">
-              Pour signer ce contrat électroniquement, vous devez confirmer votre identité en saisissant le code de vérification qui vous sera envoyé par email.
+              {!locataireLuEtApprouve
+                ? 'Cochez d\'abord « Lu et approuvé » ci-dessus, puis demandez le code de vérification pour signer électroniquement ce contrat.'
+                : 'Pour signer ce contrat électroniquement, vous devez confirmer votre identité en saisissant le code de vérification qui vous sera envoyé par email.'}
             </p>
           </div>
         </div>
@@ -380,7 +345,7 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
         ) : !codeSent ? (
           <button
             onClick={handleSendCode}
-            disabled={sending || !tenantEmail}
+            disabled={sending || !tenantEmail || !locataireLuEtApprouve}
             className="w-full px-4 sm:px-6 py-3 sm:py-4 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-sm sm:text-base font-medium hover:shadow-lg transition-all cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {sending ? (
@@ -427,7 +392,7 @@ export default function SignatureView({ rental, onBack, onComplete }: SignatureV
               </button>
               <button
                 onClick={handleVerifyCode}
-                disabled={verificationCode.length !== 6}
+                disabled={verificationCode.length !== 6 || !locataireLuEtApprouve}
                 className="flex-1 px-4 sm:px-6 py-2.5 sm:py-3 bg-gradient-to-r from-teal-500 to-teal-600 text-white rounded-lg md:rounded-xl text-sm sm:text-base font-medium hover:shadow-lg transition-all cursor-pointer whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Signer le contrat

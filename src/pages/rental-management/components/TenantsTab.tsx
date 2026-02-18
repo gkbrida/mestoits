@@ -10,6 +10,8 @@ interface Tenant {
   phone: string;
   birth_date: string;
   address: string;
+  profession?: string;
+  identity_document?: string;
   property?: string;
   rentAmount?: string;
   leaseStart?: string;
@@ -37,7 +39,9 @@ export default function TenantsTab() {
     email: '',
     phone: '',
     birthDate: '',
-    address: ''
+    address: '',
+    profession: '',
+    identityDocument: ''
   });
 
   useEffect(() => {
@@ -81,7 +85,7 @@ export default function TenantsTab() {
       if (tenantIds.length > 0) {
         const { data: leases, error: leasesError } = await supabase
           .from('leases')
-          .select('property_id, tenant_id, monthly_rent, start_date, end_date')
+          .select('property_02_id, tenant_id, monthly_rent, start_date, end_date')
           .in('tenant_id', tenantIds)
           .eq('status', 'active')
           .eq('owner_id', userId);
@@ -94,7 +98,7 @@ export default function TenantsTab() {
       }
 
       // Charger les propriétés séparément
-      const propertyIds = [...new Set(leasesData.map((l: any) => l.property_id).filter(Boolean))];
+      const propertyIds = [...new Set(leasesData.map((l: any) => l.property_02_id).filter(Boolean))];
       let propertiesMap = new Map();
       
       if (propertyIds.length > 0) {
@@ -124,7 +128,7 @@ export default function TenantsTab() {
       // Enrichir les locataires avec les informations des baux et propriétés
       const enrichedTenants = (tenantsData || []).map((tenant: any) => {
         const lease = leasesMap.get(tenant.id);
-        const property = lease ? propertiesMap.get(lease.property_id) : null;
+        const property = lease ? propertiesMap.get(lease.property_02_id) : null;
 
         return {
           ...tenant,
@@ -165,6 +169,8 @@ export default function TenantsTab() {
           phone: tenantForm.phone,
           birth_date: tenantForm.birthDate || null,
           address: tenantForm.address || null,
+          profession: tenantForm.profession?.trim() || null,
+          identity_document: tenantForm.identityDocument?.trim() || null,
         }]);
 
       if (error) throw error;
@@ -177,7 +183,7 @@ export default function TenantsTab() {
         .single();
 
       setShowAddModal(false);
-      setTenantForm({ firstName: '', lastName: '', email: '', phone: '', birthDate: '', address: '' });
+      setTenantForm({ firstName: '', lastName: '', email: '', phone: '', birthDate: '', address: '', profession: '', identityDocument: '' });
       await loadTenants();
 
       // Envoyer l'email de notification au locataire
@@ -221,6 +227,8 @@ export default function TenantsTab() {
           phone: tenantForm.phone,
           birth_date: tenantForm.birthDate || null,
           address: tenantForm.address || null,
+          profession: tenantForm.profession?.trim() || null,
+          identity_document: tenantForm.identityDocument?.trim() || null,
         })
         .eq('id', selectedTenant.id)
         .eq('owner_id', userId);
@@ -245,7 +253,7 @@ export default function TenantsTab() {
     try {
       const { data: activeLeases, error: leasesError } = await supabase
         .from('leases')
-        .select('id, property_id')
+        .select('id, property_02_id')
         .eq('tenant_id', selectedTenant.id)
         .eq('owner_id', userId)
         .eq('status', 'active');
@@ -298,7 +306,9 @@ export default function TenantsTab() {
       email: tenant.email,
       phone: tenant.phone || '',
       birthDate: tenant.birth_date || '',
-      address: tenant.address || ''
+      address: tenant.address || '',
+      profession: tenant.profession || '',
+      identityDocument: tenant.identity_document || ''
     });
     setShowEditModal(true);
   };
@@ -331,14 +341,14 @@ export default function TenantsTab() {
       let propertyId: string | null = null;
       const { data: leaseData } = await supabase
         .from('leases')
-        .select('property_id')
+        .select('property_02_id')
         .eq('tenant_id', tenant.id)
         .eq('owner_id', userId)
         .eq('status', 'active')
         .maybeSingle();
 
-      if (leaseData && leaseData.property_id) {
-        propertyId = leaseData.property_id;
+      if (leaseData?.property_02_id) {
+        propertyId = leaseData.property_02_id;
       }
 
       // Vérifier si une conversation existe déjà (messages envoyés ou reçus)
@@ -659,6 +669,28 @@ export default function TenantsTab() {
                 ></textarea>
               </div>
 
+              <div>
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1 md:mb-2">Profession <span className="text-gray-400 font-normal">(optionnel)</span></label>
+                <input
+                  type="text"
+                  value={tenantForm.profession}
+                  onChange={(e) => setTenantForm({ ...tenantForm, profession: e.target.value })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border-2 border-gray-200 rounded-lg md:rounded-xl focus:border-teal-500 focus:outline-none transition-colors text-sm md:text-base"
+                  placeholder="Ex: Comptable, Enseignant..."
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1 md:mb-2">Identité (CNI / Passeport) N° <span className="text-gray-400 font-normal">(optionnel)</span></label>
+                <input
+                  type="text"
+                  value={tenantForm.identityDocument}
+                  onChange={(e) => setTenantForm({ ...tenantForm, identityDocument: e.target.value })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border-2 border-gray-200 rounded-lg md:rounded-xl focus:border-teal-500 focus:outline-none transition-colors text-sm md:text-base"
+                  placeholder="Numéro CNI ou Passeport"
+                />
+              </div>
+
               <div className="flex flex-col sm:flex-row gap-3 pt-3 md:pt-4">
                 <button
                   onClick={() => setShowAddModal(false)}
@@ -739,6 +771,28 @@ export default function TenantsTab() {
                   value={tenantForm.phone}
                   onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
                   className="w-full px-3 md:px-4 py-2 md:py-3 border-2 border-gray-200 rounded-lg md:rounded-xl focus:border-teal-500 focus:outline-none transition-colors text-sm md:text-base"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1 md:mb-2">Profession <span className="text-gray-400 font-normal">(optionnel)</span></label>
+                <input
+                  type="text"
+                  value={tenantForm.profession}
+                  onChange={(e) => setTenantForm({ ...tenantForm, profession: e.target.value })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border-2 border-gray-200 rounded-lg md:rounded-xl focus:border-teal-500 focus:outline-none transition-colors text-sm md:text-base"
+                  placeholder="Ex: Comptable, Enseignant..."
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1 md:mb-2">Identité (CNI / Passeport) N° <span className="text-gray-400 font-normal">(optionnel)</span></label>
+                <input
+                  type="text"
+                  value={tenantForm.identityDocument}
+                  onChange={(e) => setTenantForm({ ...tenantForm, identityDocument: e.target.value })}
+                  className="w-full px-3 md:px-4 py-2 md:py-3 border-2 border-gray-200 rounded-lg md:rounded-xl focus:border-teal-500 focus:outline-none transition-colors text-sm md:text-base"
+                  placeholder="Numéro CNI ou Passeport"
                 />
               </div>
 

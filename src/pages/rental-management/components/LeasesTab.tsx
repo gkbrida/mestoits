@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import LeaseDetailView from './LeaseDetailView';
+import LeaseContractPreview from '../../../components/LeaseContractPreview';
+import LeaseContractArticlesEditor, { getDefaultContractArticles, type ContractArticlesState } from '../../../components/LeaseContractArticlesEditor';
+import { sanitizeContractArticlesForDb } from '../../../utils/leaseContractArticles';
 import { useEmail } from '../../../hooks/useEmail';
 interface Lease {
   id: string;
@@ -20,23 +23,6 @@ interface Lease {
   created_at: string;
 }
 
-interface LeaseTerms {
-  article5: string;
-  article6: string;
-  article7: string;
-  article8: string;
-  article9: string;
-  article10: string;
-}
-
-const defaultLeaseTerms: LeaseTerms = {
-  article5: "Un état des lieux contradictoire sera établi lors de la remise des clés et lors de la restitution du logement.",
-  article6: "Le locataire s'engage à :\n• Payer le loyer aux échéances convenues\n• Utiliser paisiblement les lieux loués\n• Entretenir le logement en bon état\n• Souscrire une assurance habitation\n• Ne pas sous-louer sans autorisation écrite",
-  article7: "Le bailleur s'engage à :\n• Délivrer un logement décent\n• Assurer les réparations autres que locatives\n• Garantir la jouissance paisible du logement",
-  article8: "Le loyer est payable mensuellement à terme échu. Tout retard de paiement entraînera l'application d'une pénalité de retard égale à 10% du loyer mensuel.",
-  article9: "Le locataire ne peut apporter aucune modification aux lieux loués sans l'accord écrit préalable du bailleur. Toute modification non autorisée devra être remise en état aux frais du locataire.",
-  article10: "Le bail peut être résilié par le locataire avec un préavis de trois mois. Le bailleur peut résilier le bail pour motif légitime et sérieux avec un préavis de six mois."
-};
 
 interface LeasesTabProps {
   leaseId?: string | null;
@@ -60,9 +46,11 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
   const [showCreateLeaseModal, setShowCreateLeaseModal] = useState(false);
   const [messageContent, setMessageContent] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-  const [leaseTerms, setLeaseTerms] = useState<LeaseTerms>(defaultLeaseTerms);
+  const [contractArticles, setContractArticles] = useState<ContractArticlesState>(getDefaultContractArticles());
+  const [bailleurLuEtApprouve, setBailleurLuEtApprouve] = useState(false);
   const [availableProperties, setAvailableProperties] = useState<any[]>([]);
   const [availableTenants, setAvailableTenants] = useState<any[]>([]);
+  const [ownerData, setOwnerData] = useState<{ full_name?: string; company_address?: string; phone?: string; email?: string } | null>(null);
   const [leaseFormData, setLeaseFormData] = useState({
     property_id: '',
     tenant_id: '',
@@ -71,7 +59,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     monthly_rent: '',
     security_deposit: '',
     advance_rent_amount: '',
-    payment_due_day: '',
+    payment_due_day: '5',
     additional_notes: ''
   });
 
@@ -84,8 +72,23 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
       loadLeases();
       loadAvailableProperties();
       loadAvailableTenants();
+      loadOwnerData();
     }
   }, [userId]);
+
+  const loadOwnerData = async () => {
+    if (!userId) return;
+    try {
+      const { data } = await supabase
+        .from('users_2025_12_01_11_29')
+        .select('full_name, company_address, phone, email')
+        .eq('id', userId)
+        .maybeSingle();
+      setOwnerData(data || null);
+    } catch (error) {
+      console.error('Erreur lors du chargement du propriétaire:', error);
+    }
+  };
 
   // Ouvrir automatiquement LeaseDetailView si leaseId est fourni
   useEffect(() => {
@@ -127,7 +130,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     try {
       const { data, error } = await supabase
         .from('properties_02')
-        .select('id, title, address, city, price, deposit_months, advance_months')
+        .select('id, title, address, city, price, deposit_months, advance_months, property_type, surface_area, bedrooms, features')
         .eq('owner_id', userId)
         .eq('operation_type', 'rental') // Uniquement les biens en location longue durée
         .or('status.eq.active,status.eq.available')
@@ -144,7 +147,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     try {
       const { data, error } = await supabase
         .from('tenants')
-        .select('id, first_name, last_name, email')
+        .select('id, first_name, last_name, email, phone, profession, identity_document')
         .eq('owner_id', userId)
         .order('created_at', { ascending: false });
 
@@ -429,6 +432,16 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
     e.preventDefault();
     if (!userId || !leaseFormData.property_id || !leaseFormData.tenant_id) return;
 
+    if (!bailleurLuEtApprouve) {
+      alert('Veuillez cocher la case "Lu et approuvé" pour confirmer que vous avez lu et approuvé le contrat.');
+      return;
+    }
+
+    const confirmer = window.confirm(
+      'En cliquant sur OK, vous signez électroniquement le contrat de bail et celui-ci sera transmis à votre locataire pour signature.\n\nConfirmez-vous cette action ?'
+    );
+    if (!confirmer) return;
+
     // Validation : la date de fin ne peut pas être antérieure à la date de début
     if (leaseFormData.start_date && leaseFormData.end_date) {
       const startDate = new Date(leaseFormData.start_date);
@@ -469,8 +482,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
       const { error } = await supabase
         .from('leases')
         .insert([{
-          property_02_id: leaseFormData.property_id, // Utiliser property_02_id pour référencer properties_02
-          property_id: null, // Laisser null car on utilise property_02_id
+          property_02_id: leaseFormData.property_id, // Référence vers properties_02
           owner_id: userId,
           tenant_id: leaseFormData.tenant_id,
           start_date: leaseFormData.start_date,
@@ -480,12 +492,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
           advance_rent_amount: leaseFormData.advance_rent_amount ? parseFloat(leaseFormData.advance_rent_amount) : null,
           payment_due_day: leaseFormData.payment_due_day ? parseInt(leaseFormData.payment_due_day) : null,
           status: 'pending_signature',
-          article5: leaseTerms.article5,
-          article6: leaseTerms.article6,
-          article7: leaseTerms.article7,
-          article8: leaseTerms.article8,
-          article9: leaseTerms.article9,
-          article10: leaseTerms.article10,
+          contract_articles: sanitizeContractArticlesForDb(contractArticles),
           additional_notes: leaseFormData.additional_notes || null,
         }]);
 
@@ -504,7 +511,8 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
       }
 
       setShowCreateLeaseModal(false);
-      setLeaseTerms(defaultLeaseTerms);
+      setContractArticles(getDefaultContractArticles());
+      setBailleurLuEtApprouve(false);
       setLeaseFormData({
         property_id: '',
         tenant_id: '',
@@ -513,7 +521,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
         monthly_rent: '',
         security_deposit: '',
         advance_rent_amount: '',
-        payment_due_day: '',
+        payment_due_day: '5',
         additional_notes: ''
       });
       await loadLeases();
@@ -912,7 +920,8 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
               <button
                 onClick={() => {
                   setShowCreateLeaseModal(false);
-                  setLeaseTerms(defaultLeaseTerms);
+                  setContractArticles(getDefaultContractArticles());
+                  setBailleurLuEtApprouve(false);
                 }}
                 className="w-9 h-9 md:w-10 md:h-10 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors cursor-pointer"
               >
@@ -1065,6 +1074,11 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
                     onChange={(e) => setLeaseFormData({ ...leaseFormData, security_deposit: e.target.value })}
                     className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg md:rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-sm"
                   />
+                  {leaseFormData.monthly_rent && leaseFormData.security_deposit && parseFloat(leaseFormData.security_deposit) > 2 * parseFloat(leaseFormData.monthly_rent) && (
+                    <p className="text-amber-600 text-[10px] md:text-xs mt-1 font-medium">
+                      ⚠️ Ces montants sont légalement limités à 2 mois de loyer.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1084,6 +1098,11 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
                   <p className="text-[10px] md:text-xs text-gray-500 mt-1">
                     Montant payé par le locataire lors de la signature du bail
                   </p>
+                  {leaseFormData.monthly_rent && leaseFormData.advance_rent_amount && parseFloat(leaseFormData.advance_rent_amount) > 2 * parseFloat(leaseFormData.monthly_rent) && (
+                    <p className="text-amber-600 text-[10px] md:text-xs mt-1 font-medium">
+                      ⚠️ Ces montants sont légalement limités à 2 mois de loyer.
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
@@ -1111,105 +1130,84 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
                 </div>
               </div>
 
-              {/* Lease Terms Section */}
+              {/* Articles du contrat (modifiables) */}
               <div className="border-t border-gray-200 pt-4 md:pt-6">
                 <div className="flex items-center gap-2 mb-3 md:mb-4">
                   <i className="ri-file-text-line text-xl md:text-2xl text-teal-600 w-5 h-5 md:w-6 md:h-6 flex items-center justify-center"></i>
-                  <h4 className="text-base md:text-lg font-bold text-gray-900">Articles du contrat de bail</h4>
+                  <h4 className="text-base md:text-lg font-bold text-gray-900">Articles du contrat (modifiables)</h4>
                 </div>
-                <p className="text-xs md:text-sm text-gray-600 mb-4 md:mb-6">
-                  Vous pouvez personnaliser les articles du contrat selon vos besoins. Les modifications seront incluses dans le bail signé par le locataire.
+                <p className="text-xs md:text-sm text-gray-600 mb-3">
+                  Les 17 articles sont modifiables. Les valeurs dynamiques (loyer, adresse, etc.) sont insérées automatiquement.
                 </p>
-
-                <div className="space-y-3 md:space-y-4">
-                  {/* Article 5 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 1 - État des lieux
-                    </label>
-                    <textarea
-                      value={leaseTerms.article5}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article5: e.target.value })}
-                      rows={2}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-
-                  {/* Article 6 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 2 - Obligations du locataire
-                    </label>
-                    <textarea
-                      value={leaseTerms.article6}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article6: e.target.value })}
-                      rows={4}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-
-                  {/* Article 7 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 3 - Obligations du bailleur
-                    </label>
-                    <textarea
-                      value={leaseTerms.article7}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article7: e.target.value })}
-                      rows={3}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-
-                  {/* Article 8 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 4 - Paiement du loyer
-                    </label>
-                    <textarea
-                      value={leaseTerms.article8}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article8: e.target.value })}
-                      rows={2}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-
-                  {/* Article 9 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 5 - Travaux et modifications
-                    </label>
-                    <textarea
-                      value={leaseTerms.article9}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article9: e.target.value })}
-                      rows={3}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-
-                  {/* Article 10 */}
-                  <div className="bg-gray-50 rounded-lg md:rounded-xl p-3 md:p-4">
-                    <label className="block text-xs md:text-sm font-semibold text-gray-900 mb-1 md:mb-2">
-                      Article 6 - Résiliation du bail
-                    </label>
-                    <textarea
-                      value={leaseTerms.article10}
-                      onChange={(e) => setLeaseTerms({ ...leaseTerms, article10: e.target.value })}
-                      rows={3}
-                      className="w-full px-3 md:px-4 py-2 md:py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 resize-none text-xs md:text-sm"
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setLeaseTerms(defaultLeaseTerms)}
-                  className="mt-3 md:mt-4 px-3 md:px-4 py-1.5 md:py-2 text-xs md:text-sm text-teal-600 hover:text-teal-700 font-medium cursor-pointer whitespace-nowrap flex items-center gap-1.5 md:gap-2"
-                >
-                  <i className="ri-refresh-line w-3 h-3 md:w-4 md:h-4 flex items-center justify-center"></i>
-                  Réinitialiser aux valeurs par défaut
-                </button>
+                <LeaseContractArticlesEditor
+                  contractArticles={contractArticles}
+                  onChange={setContractArticles}
+                  replacements={{
+                    property_address: (() => {
+                      const p = availableProperties.find((pr) => pr.id === leaseFormData.property_id);
+                      return p?.address || '—';
+                    })(),
+                    property_city: (() => {
+                      const p = availableProperties.find((pr) => pr.id === leaseFormData.property_id);
+                      return p?.city ? `, ${p.city}` : '';
+                    })(),
+                    consistance: (() => {
+                      const p = availableProperties.find((pr) => pr.id === leaseFormData.property_id);
+                      if (!p) return '—';
+                      const type = p.property_type === 'apartment' ? 'Appartement' : p.property_type === 'villa' ? 'Villa' : p.property_type === 'house' ? 'Maison' : 'Appartement/Villa';
+                      const parts = [type, p.bedrooms ? `${p.bedrooms} pièce(s)` : '', p.surface_area ? `${p.surface_area} m²` : ''].filter(Boolean);
+                      return parts.join(', ') || '—';
+                    })(),
+                    equipments: leaseFormData.additional_notes?.trim() || (() => {
+                      const p = availableProperties.find((pr) => pr.id === leaseFormData.property_id);
+                      const f = p?.features;
+                      return (Array.isArray(f) ? f.join(', ') : f) || '—';
+                    })(),
+                    duration_years: leaseFormData.start_date && leaseFormData.end_date
+                      ? (() => {
+                          const d1 = new Date(leaseFormData.start_date);
+                          const d2 = new Date(leaseFormData.end_date);
+                          const years = Math.round((d2.getTime() - d1.getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+                          return years >= 1 ? `${years} an(s)` : '1 an';
+                        })()
+                      : '—',
+                    start_date: leaseFormData.start_date ? new Date(leaseFormData.start_date).toLocaleDateString('fr-FR') : '—',
+                    monthly_rent: leaseFormData.monthly_rent ? Number(leaseFormData.monthly_rent).toLocaleString('fr-FR') : '0',
+                    payment_due_day: leaseFormData.payment_due_day || '5',
+                    advance_amount: leaseFormData.advance_rent_amount ? Number(leaseFormData.advance_rent_amount).toLocaleString('fr-FR') : '0',
+                    deposit_amount: leaseFormData.security_deposit ? Number(leaseFormData.security_deposit).toLocaleString('fr-FR') : '0',
+                  }}
+                />
               </div>
+
+              {/* Aperçu du contrat */}
+              <div className="border-t border-gray-200 pt-4 md:pt-6">
+                <div className="flex items-center gap-2 mb-3 md:mb-4">
+                  <i className="ri-file-list-3-line text-xl md:text-2xl text-teal-600 w-5 h-5 md:w-6 md:h-6 flex items-center justify-center"></i>
+                  <h4 className="text-base md:text-lg font-bold text-gray-900">Aperçu du contrat</h4>
+                </div>
+                <LeaseContractPreview
+                  data={{
+                    owner: ownerData || undefined,
+                    tenant: leaseFormData.tenant_id ? availableTenants.find((t) => t.id === leaseFormData.tenant_id) || undefined : undefined,
+                    property: leaseFormData.property_id ? availableProperties.find((p) => p.id === leaseFormData.property_id) || undefined : undefined,
+                    lease: {
+                      start_date: leaseFormData.start_date || undefined,
+                      end_date: leaseFormData.end_date || undefined,
+                      monthly_rent: leaseFormData.monthly_rent || undefined,
+                      security_deposit: leaseFormData.security_deposit || undefined,
+                      advance_rent_amount: leaseFormData.advance_rent_amount || undefined,
+                      payment_due_day: leaseFormData.payment_due_day || '5',
+                      additional_notes: leaseFormData.additional_notes || undefined,
+                      contract_articles: contractArticles,
+                    },
+                  }}
+                  maxHeight="max-h-64 sm:max-h-72"
+                  showBailleurLuEtApprouve={bailleurLuEtApprouve}
+                />
+              </div>
+
+              
 
               {/* Additional Notes */}
               <div>
@@ -1225,13 +1223,28 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
                 />
               </div>
 
+              {/* Lu et approuvé - Bailleur */}
+              <div className="flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-lg md:rounded-xl">
+                <input
+                  type="checkbox"
+                  id="bailleur-lu-approuve"
+                  checked={bailleurLuEtApprouve}
+                  onChange={(e) => setBailleurLuEtApprouve(e.target.checked)}
+                  className="mt-1 w-4 h-4 text-teal-600 border-gray-300 rounded focus:ring-teal-500 cursor-pointer"
+                />
+                <label htmlFor="bailleur-lu-approuve" className="text-sm text-gray-800 cursor-pointer select-none">
+                  Je déclare avoir lu et approuvé le présent contrat de bail.
+                </label>
+              </div>
+
               {/* Actions */}
               <div className="flex flex-col sm:flex-row gap-3 md:gap-4 pt-3 md:pt-4 border-t border-gray-200">
                 <button
                   type="button"
                   onClick={() => {
                     setShowCreateLeaseModal(false);
-                    setLeaseTerms(defaultLeaseTerms);
+                    setContractArticles(getDefaultContractArticles());
+                    setBailleurLuEtApprouve(false);
                     setLeaseFormData({
                       property_id: '',
                       tenant_id: '',
@@ -1240,7 +1253,7 @@ export default function LeasesTab({ leaseId }: LeasesTabProps) {
                       monthly_rent: '',
                       security_deposit: '',
                       advance_rent_amount: '',
-                      payment_due_day: '',
+                      payment_due_day: '5',
                       additional_notes: ''
                     });
                   }}

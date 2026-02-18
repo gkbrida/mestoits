@@ -183,14 +183,15 @@ export default function DashboardTab() {
                     payments.map(async (payment: any) => {
                       const { data: leaseData } = await supabase
                         .from('leases')
-                        .select('property_id')
+                        .select('property_02_id')
                         .eq('id', payment.lease_id)
                         .single();
-                      if (leaseData?.property_id) {
+                      const propId = leaseData?.property_02_id;
+                      if (propId) {
                         const { data: propertyData } = await supabase
                           .from('properties_02')
                           .select('title')
-                          .eq('id', leaseData.property_id)
+                          .eq('id', propId)
                           .single();
                         return { ...payment, property_title: propertyData?.title || 'Bien' };
                       }

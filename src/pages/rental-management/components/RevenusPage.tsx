@@ -57,7 +57,7 @@ export default function RevenusPage({ userId, onBack }: RevenusPageProps) {
     try {
       const { data, error } = await supabase
         .from('leases')
-        .select('id, property_id, monthly_rent, start_date, end_date')
+        .select('id, property_02_id, monthly_rent, start_date, end_date')
         .eq('owner_id', userId)
         .eq('status', 'active');
 
@@ -65,11 +65,12 @@ export default function RevenusPage({ userId, onBack }: RevenusPageProps) {
 
       // Enrichir avec les titres des propriétés
       const leasesWithDetails = await Promise.all(
-        (data || []).map(async (lease) => {
+        (data || []).map(async (lease: { property_02_id?: string }) => {
+          const propId = lease.property_02_id;
           const { data: propertyData } = await supabase
             .from('properties_02')
             .select('title')
-            .eq('id', lease.property_id)
+            .eq('id', propId)
             .single();
 
           return {
@@ -128,15 +129,16 @@ export default function RevenusPage({ userId, onBack }: RevenusPageProps) {
           if (revenue.revenue_type === 'lease' && revenue.lease_id) {
             const { data: leaseData } = await supabase
               .from('leases')
-              .select('property_id, monthly_rent')
+              .select('property_02_id, monthly_rent')
               .eq('id', revenue.lease_id)
               .single();
 
-            if (leaseData) {
+            const propId = leaseData?.property_02_id;
+            if (leaseData && propId) {
               const { data: propertyData } = await supabase
                 .from('properties_02')
                 .select('title')
-                .eq('id', leaseData.property_id)
+                .eq('id', propId)
                 .single();
 
               propertyTitle = propertyData?.title || 'Bien';
