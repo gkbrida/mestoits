@@ -123,8 +123,8 @@ export default async function handler(
       console.warn('⚠️ ATTENTION: reservationId non fourni! La réservation ne pourra pas être mise à jour automatiquement.');
     }
 
-    // Construire les URLs de retour
-    const successUrl = `${origin}/bien/${propertyId}?payment=success&reservation=${reservationId || ''}`;
+    // Construire les URLs de retour - Stripe remplacera {CHECKOUT_SESSION_ID} par l'ID de session
+    const successUrl = `${origin}/bien/${propertyId}?payment=success&reservation=${reservationId || ''}&session_id={CHECKOUT_SESSION_ID}`;
     const cancelUrl = `${origin}/bien/${propertyId}?payment=cancelled&reservation=${reservationId || ''}`;
     
     console.log(`✅ Success URL: ${successUrl}`);

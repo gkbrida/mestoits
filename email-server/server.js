@@ -537,6 +537,106 @@ app.post("/admin/affiliation-settings", async (req, res) => {
   }
 });
 
+// Confirmation paiement réservation (reservations_temp → reservations) - pour dev local / proxy
+app.post("/confirm-reservation-temp-payment", async (req, res) => {
+  try {
+    const { reservationId, sessionId } = req.body || {};
+    if (!reservationId) {
+      return res.status(400).json({ success: false, error: 'reservationId requis' });
+    }
+
+    const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(500).json({ success: false, error: 'Supabase non configuré' });
+    }
+
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
+
+    if (sessionId && process.env.STRIPE_SECRET_KEY) {
+      let session = await stripe.checkout.sessions.retrieve(sessionId);
+      if (session.payment_status !== 'paid') {
+        await new Promise((r) => setTimeout(r, 2000));
+        session = await stripe.checkout.sessions.retrieve(sessionId);
+      }
+      if (session.payment_status !== 'paid') {
+        return res.status(400).json({ success: false, error: 'Paiement non encore confirmé. Veuillez patienter quelques secondes et rafraîchir la page.' });
+      }
+      const metaReservationId = String(session.metadata?.reservationId || '');
+      if (metaReservationId && metaReservationId !== String(reservationId)) {
+        return res.status(400).json({ success: false, error: 'Session invalide pour cette réservation.' });
+      }
+    }
+
+    const { data: tempData, error: fetchError } = await supabaseAdmin
+      .from('reservations_temp')
+      .select('property_id, owner_id, guest_name, guest_email, guest_phone, start_date, end_date, nights, total_amount')
+      .eq('id', reservationId)
+      .single();
+
+    if (fetchError || !tempData) {
+      return res.status(404).json({
+        success: false,
+        error: 'Réservation temporaire introuvable. Si vous avez payé par Mobile Money, votre réservation a peut-être déjà été confirmée. Consultez la page Mes réservations.',
+      });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('reservations')
+      .select('id')
+      .eq('property_id', tempData.property_id)
+      .eq('guest_email', tempData.guest_email)
+      .eq('start_date', tempData.start_date)
+      .eq('end_date', tempData.end_date)
+      .eq('status', 'confirmed')
+      .maybeSingle();
+
+    if (existing) {
+      await supabaseAdmin.from('reservations_temp').delete().eq('id', reservationId);
+      return res.status(200).json({ success: true, reservationId: existing.id, reservation: { ...tempData, id: existing.id }, message: 'Réservation déjà confirmée' });
+    }
+
+    const totalAmount = parseFloat(String(tempData.total_amount)) || 0;
+    const nights = parseInt(String(tempData.nights), 10) || 1;
+
+    const { data: newReservation, error: insertError } = await supabaseAdmin
+      .from('reservations')
+      .insert([{
+        property_id: tempData.property_id,
+        owner_id: tempData.owner_id,
+        guest_name: String(tempData.guest_name),
+        guest_email: String(tempData.guest_email),
+        guest_phone: tempData.guest_phone || null,
+        start_date: String(tempData.start_date),
+        end_date: String(tempData.end_date),
+        nights: isNaN(nights) ? 1 : nights,
+        total_amount: totalAmount,
+        amount_paid: totalAmount,
+        status: 'confirmed',
+        source: 'platform',
+      }])
+      .select('id')
+      .single();
+
+    if (insertError || !newReservation) {
+      console.error('❌ Erreur insertion reservations:', insertError);
+      return res.status(500).json({ success: false, error: insertError?.message || 'Erreur lors de la création de la réservation' });
+    }
+
+    await supabaseAdmin.from('reservations_temp').delete().eq('id', reservationId);
+
+    res.status(200).json({
+      success: true,
+      reservationId: newReservation.id,
+      reservation: { id: newReservation.id, ...tempData },
+      message: 'Réservation confirmée',
+    });
+  } catch (err) {
+    console.error('Erreur confirm-reservation-temp-payment:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Erreur serveur' });
+  }
+});
+
 // Gestion des erreurs 404
 app.use((req, res) => {
   console.log(`⚠️ Route non trouvée: ${req.method} ${req.path}`);
@@ -547,6 +647,7 @@ app.use((req, res) => {
       'GET /health',
       'POST /send-email',
       'POST /create-payment-session',
+      'POST /confirm-reservation-temp-payment',
       'POST /admin/login',
       'GET /admin/affiliation-settings',
       'POST /admin/affiliation-settings'
