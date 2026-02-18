@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { generateInstallmentPaymentReceiptPDF } from '../../../utils/installmentPaymentReceiptPdfGenerator';
+import ConfirmModal from '../../../components/ui/ConfirmModal';
 
 
 interface PaiementEchelonnePageProps {
@@ -49,6 +50,17 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
   const [actionLoading, setActionLoading] = useState(false);
   const [properties, setProperties] = useState<any[]>([]);
   const [expandedPlans, setExpandedPlans] = useState<Set<string>>(new Set());
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'default' | 'danger' | 'success';
+    infoOnly?: boolean;
+    loading?: boolean;
+  } | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [form, setForm] = useState({
     property_id: '',
     total_amount: '',
@@ -198,22 +210,43 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
     return targetDate;
   };
 
-  const handleSubmit = async () => {
+  const doSubmit = async () => {
     if (!form.property_id || !form.total_amount || !form.number_of_installments || !form.start_date) {
-      alert('Veuillez remplir tous les champs obligatoires');
+      setConfirmConfig({
+        title: 'Champs manquants',
+        message: 'Veuillez remplir tous les champs obligatoires.',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
       return;
     }
 
     // Vérifier payment_due_day si frequency est monthly ou quarterly
     if ((form.frequency === 'monthly' || form.frequency === 'quarterly') && !form.payment_due_day) {
-      alert('Veuillez renseigner le jour du mois pour les échéances');
+      setConfirmConfig({
+        title: 'Jour d\'échéance manquant',
+        message: 'Veuillez renseigner le jour du mois pour les échéances.',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
       return;
     }
 
     const totalAmount = parseFloat(form.total_amount);
     const numberOfInstallments = parseInt(form.number_of_installments);
     if (numberOfInstallments < 2) {
-      alert('Le nombre d\'échéances doit être au moins 2');
+      setConfirmConfig({
+        title: 'Nombre d\'échéances invalide',
+        message: 'Le nombre d\'échéances doit être au moins 2.',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
       return;
     }
 
@@ -229,7 +262,14 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
     }
 
     if (firstPaymentAmount >= totalAmount) {
-      alert('Le premier paiement ne peut pas être supérieur ou égal au montant total');
+      setConfirmConfig({
+        title: 'Premier paiement invalide',
+        message: 'Le premier paiement ne peut pas être supérieur ou égal au montant total.',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
       return;
     }
 
@@ -262,6 +302,43 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       let planId: string;
 
       if (editingPlan) {
+        // En modification : supprimer les échéances existantes et les recréer (formulaire identique à la création)
+        await supabase
+          .from('installment_payments')
+          .delete()
+          .eq('installment_plan_id', editingPlan.id);
+
+        const installments = [];
+        const startDate = new Date(form.start_date);
+        const regularAmount = Math.round(remainder / remainingInstallments);
+        const lastRegularAmount = remainder - regularAmount * (remainingInstallments - 1);
+
+        for (let i = 0; i < numberOfInstallments; i++) {
+          let dueDate: Date;
+          if (form.frequency === 'monthly') {
+            dueDate = paymentDueDay ? calculateDueDate(startDate, paymentDueDay, i) : (() => { const d = new Date(startDate); d.setMonth(d.getMonth() + i); return d; })();
+          } else if (form.frequency === 'weekly') {
+            dueDate = new Date(startDate);
+            dueDate.setDate(dueDate.getDate() + (i * 7));
+          } else if (form.frequency === 'quarterly') {
+            dueDate = paymentDueDay ? calculateDueDate(startDate, paymentDueDay, i * 3) : (() => { const d = new Date(startDate); d.setMonth(d.getMonth() + (i * 3)); return d; })();
+          } else {
+            dueDate = new Date(startDate);
+          }
+          const amount = firstPaymentAmount > 0 && i === 0
+            ? firstPaymentAmount
+            : (firstPaymentAmount > 0 && i === numberOfInstallments - 1 ? lastRegularAmount : regularAmount);
+          installments.push({
+            installment_plan_id: editingPlan.id,
+            installment_number: i + 1,
+            due_date: dueDate.toISOString().split('T')[0],
+            amount: Math.round(amount * 100) / 100,
+            status: 'pending'
+          });
+        }
+
+        await supabase.from('installment_payments').insert(installments);
+
         const { error } = await supabase
           .from('installment_plans')
           .update(planData)
@@ -269,7 +346,30 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
 
         if (error) throw error;
         planId = editingPlan.id;
-        alert('Plan de paiement modifié avec succès !');
+
+        // Notifier le client par email
+        if (form.payer_email) {
+          try {
+            const { data: ownerData } = await supabase.from('users_2025_12_01_11_29').select('full_name, email, phone').eq('id', userId).single();
+            const { data: propertyData } = await supabase.from('properties_02').select('title, address, city, surface_area, rooms').eq('id', form.property_id).single();
+            const effectiveInstallmentAmount = firstPaymentAmount > 0 ? regularInstallmentAmount : installmentAmount;
+            const emailHtml = buildInstallmentPlanModifiedEmail({
+              payerName: `${form.payer_first_name} ${form.payer_last_name}`,
+              ownerName: ownerData?.full_name || 'Le propriétaire',
+              ownerEmail: ownerData?.email || '',
+              ownerPhone: ownerData?.phone || '',
+              propertyTitle: propertyData?.title || 'Bien immobilier',
+              totalAmount, numberOfInstallments, installmentAmount: effectiveInstallmentAmount,
+              firstPaymentAmount: firstPaymentAmount > 0 ? firstPaymentAmount : undefined,
+              frequency: form.frequency, paymentDueDay, startDate: form.start_date,
+              installments: installments.map(inst => ({ number: inst.installment_number, dueDate: inst.due_date, amount: inst.amount }))
+            });
+            const emailText = buildInstallmentPlanModifiedEmailText({ payerName: `${form.payer_first_name} ${form.payer_last_name}`, ownerName: ownerData?.full_name || 'Le propriétaire', ownerEmail: ownerData?.email || '', ownerPhone: ownerData?.phone || '', propertyTitle: propertyData?.title || 'Bien immobilier', totalAmount, numberOfInstallments, installmentAmount: effectiveInstallmentAmount, firstPaymentAmount: firstPaymentAmount > 0 ? firstPaymentAmount : undefined, frequency: form.frequency, paymentDueDay, startDate: form.start_date, installments: installments.map(inst => ({ number: inst.installment_number, dueDate: inst.due_date, amount: inst.amount })) });
+            await fetch('/api/send-email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: form.payer_email, subject: `Plan de paiement modifié - ${propertyData?.title || 'Bien immobilier'}`, html: emailHtml, text: emailText }) });
+          } catch (emailError: any) {
+            console.error('Erreur envoi email modification:', emailError);
+          }
+        }
       } else {
         const { data, error } = await supabase
           .from('installment_plans')
@@ -279,7 +379,6 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
 
         if (error) throw error;
         planId = data.id;
-        alert('Plan de paiement créé avec succès !');
 
         // Créer les échéances (premier paiement éventuel + reste réparti)
         const installments = [];
@@ -438,50 +537,125 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
         payer_address: ''
       });
       await loadPlans();
+      setSuccessMessage(editingPlan ? 'Plan de paiement modifié avec succès !' : 'Plan de paiement créé avec succès !');
+      setShowSuccessModal(true);
     } catch (error: any) {
       console.error('Erreur:', error);
-      if (error.message?.includes('does not exist')) {
-        alert('Les tables installment_plans et installment_payments n\'existent pas encore. Veuillez créer ces tables dans Supabase.');
-      } else {
-        alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
-      }
+      const errMsg = error.message?.includes('does not exist')
+        ? 'Les tables installment_plans et installment_payments n\'existent pas encore.'
+        : (error.message || 'Erreur inconnue');
+      setConfirmConfig({
+        title: 'Erreur',
+        message: errMsg,
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce plan de paiement ?')) return;
+  const handleSubmit = () => {
+    setConfirmConfig({
+      title: editingPlan ? 'Confirmer la modification' : 'Confirmer la création',
+      message: editingPlan
+        ? 'Voulez-vous modifier ce plan de paiement ? Le client sera notifié par email.'
+        : 'Voulez-vous créer ce plan de paiement ? Le client sera notifié par email.',
+      onConfirm: () => {
+        setShowConfirmModal(false);
+        doSubmit();
+      },
+      variant: 'default',
+    });
+    setShowConfirmModal(true);
+  };
 
+  const handleCancelClick = (plan: InstallmentPlan) => {
+    setConfirmConfig({
+      title: 'Annuler le plan',
+      message: 'Voulez-vous annuler ce plan de paiement ? Le client sera notifié par email. L\'annulation est irréversible.',
+      onConfirm: () => {
+        setShowConfirmModal(false);
+        doCancelPlan(plan);
+      },
+      variant: 'danger',
+    });
+    setShowConfirmModal(true);
+  };
+
+  const doCancelPlan = async (plan: InstallmentPlan) => {
     try {
-      // Supprimer d'abord les paiements
-      await supabase
-        .from('installment_payments')
-        .delete()
-        .eq('installment_plan_id', id);
-
-      // Puis supprimer le plan
+      setActionLoading(true);
       const { error } = await supabase
         .from('installment_plans')
-        .delete()
-        .eq('id', id);
+        .update({ status: 'cancelled' })
+        .eq('id', plan.id);
 
       if (error) throw error;
-      alert('Plan de paiement supprimé avec succès !');
+
+      // Notifier le client par email
+      if (plan.payer_email) {
+        try {
+          const { data: ownerData } = await supabase.from('users_2025_12_01_11_29').select('full_name, email, phone').eq('id', userId).single();
+          const emailHtml = buildInstallmentPlanCancelledEmail({
+            payerName: plan.payer_first_name && plan.payer_last_name ? `${plan.payer_first_name} ${plan.payer_last_name}` : 'Client',
+            ownerName: ownerData?.full_name || 'Le propriétaire',
+            propertyTitle: plan.property_title || 'Bien immobilier',
+          });
+          const emailText = buildInstallmentPlanCancelledEmailText({
+            payerName: plan.payer_first_name && plan.payer_last_name ? `${plan.payer_first_name} ${plan.payer_last_name}` : 'Client',
+            ownerName: ownerData?.full_name || 'Le propriétaire',
+            propertyTitle: plan.property_title || 'Bien immobilier',
+          });
+          await fetch('/api/send-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: plan.payer_email,
+              subject: `Plan de paiement annulé - ${plan.property_title || 'Bien immobilier'}`,
+              html: emailHtml,
+              text: emailText,
+            }),
+          });
+        } catch (emailError: any) {
+          console.error('Erreur envoi email annulation:', emailError);
+        }
+      }
+
+      setSuccessMessage('Plan de paiement annulé. Le client a été notifié.');
+      setShowSuccessModal(true);
       await loadPlans();
     } catch (error: any) {
       console.error('Erreur:', error);
-      alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
+      setConfirmConfig({
+        title: 'Erreur',
+        message: error?.message || 'Erreur lors de l\'annulation',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const handleEdit = (plan: InstallmentPlan) => {
     setEditingPlan(plan);
+    // Détecter un premier paiement différent (formulaire identique à la création)
+    let firstPaymentType: 'none' | 'percentage' | 'fixed' = 'none';
+    let firstPaymentValue = '';
+    if (plan.payments?.length >= 2 && plan.payments[0]?.amount !== plan.installment_amount) {
+      firstPaymentType = 'fixed';
+      firstPaymentValue = plan.payments[0].amount.toString();
+    }
     setForm({
       property_id: plan.property_id,
       total_amount: plan.total_amount.toString(),
-      first_payment_type: 'none',
-      first_payment_value: '',
+      first_payment_type: firstPaymentType,
+      first_payment_value: firstPaymentValue,
       number_of_installments: plan.number_of_installments.toString(),
       start_date: plan.start_date,
       frequency: plan.frequency,
@@ -513,7 +687,14 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
       await loadPlans();
     } catch (error: any) {
       console.error('Erreur:', error);
-      alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
+      setConfirmConfig({
+        title: 'Erreur',
+        message: error.message || 'Erreur inconnue',
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
     }
   };
 
@@ -636,7 +817,14 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
             <div key={plan.id} className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 md:p-6">
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-4 gap-3">
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-base sm:text-lg font-bold text-gray-900 mb-1 break-words">{plan.property_title}</h3>
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <h3 className="text-base sm:text-lg font-bold text-gray-900 break-words">{plan.property_title}</h3>
+                    {plan.status === 'cancelled' && (
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                        Annulé
+                      </span>
+                    )}
+                  </div>
                   {/* Informations supplémentaires du bien */}
                   <div className="flex flex-wrap gap-3 text-sm text-gray-600 mb-2">
                     {plan.property_location && (
@@ -761,7 +949,14 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                         });
                       } catch (error: any) {
                         console.error('Erreur lors de la génération du PDF:', error);
-                        alert(`Erreur lors de la génération du PDF: ${error.message}`);
+                        setConfirmConfig({
+                          title: 'Erreur',
+                          message: `Erreur lors de la génération du PDF: ${error.message}`,
+                          onConfirm: () => setShowConfirmModal(false),
+                          variant: 'danger',
+                          infoOnly: true,
+                        });
+                        setShowConfirmModal(true);
                       }
                     }}
                     className="p-2 hover:bg-green-50 rounded-lg transition-colors cursor-pointer"
@@ -769,20 +964,24 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                   >
                     <i className="ri-file-download-line text-green-600"></i>
                   </button>
-                  <button
-                    onClick={() => handleEdit(plan)}
-                    className="p-2 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                    title="Modifier"
-                  >
-                    <i className="ri-edit-line text-blue-600"></i>
-                  </button>
-                  <button
-                    onClick={() => handleDelete(plan.id)}
-                    className="p-2 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                    title="Supprimer"
-                  >
-                    <i className="ri-delete-bin-line text-red-600"></i>
-                  </button>
+                  {plan.status === 'active' && (
+                    <button
+                      onClick={() => handleEdit(plan)}
+                      className="p-2 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                      title="Modifier"
+                    >
+                      <i className="ri-edit-line text-blue-600"></i>
+                    </button>
+                  )}
+                  {plan.status === 'active' && (
+                    <button
+                      onClick={() => handleCancelClick(plan)}
+                      className="p-2 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                      title="Annuler"
+                    >
+                      <i className="ri-close-circle-line text-amber-600"></i>
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -884,16 +1083,22 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                   onChange={(e) => {
                     const id = e.target.value;
                     const prop = properties.find((p: any) => p.id === id);
+                    const editProp = editingPlan && editingPlan.property_id === id ? { price: editingPlan.total_amount } : null;
                     setForm({
                       ...form,
                       property_id: id,
-                      total_amount: prop?.price != null ? String(prop.price) : form.total_amount,
+                      total_amount: (prop?.price ?? editProp?.price) != null ? String(prop?.price ?? editProp?.price) : form.total_amount,
                     });
                   }}
                   className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
                 >
                   <option value="">Sélectionner un bien</option>
-                  {properties.map((property) => (
+                  {editingPlan && !properties.find((p: any) => p.id === editingPlan.property_id) && (
+                    <option value={editingPlan.property_id}>
+                      {editingPlan.property_title || 'Bien actuel'} {editingPlan.property_location ? `- ${editingPlan.property_location}` : ''} (actuel)
+                    </option>
+                  )}
+                  {properties.map((property: any) => (
                     <option key={property.id} value={property.id}>
                       {property.title} {property.address ? `- ${property.address}, ${property.city || ''}` : ''}
                       {property.price != null ? ` - ${Number(property.price).toLocaleString('fr-FR')} FCFA` : ''}
@@ -927,8 +1132,7 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                 </div>
               </div>
 
-              {/* Premier paiement (optionnel) - uniquement en création */}
-              {!editingPlan && (
+              {/* Premier paiement (optionnel) - formulaire identique création/modification */}
               <div className="border border-gray-200 rounded-lg p-4 bg-gray-50/50">
                 <label className="block text-sm font-medium text-gray-700 mb-3">Premier paiement (optionnel)</label>
                 <p className="text-xs text-gray-500 mb-3">
@@ -987,7 +1191,6 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
                   </div>
                 )}
               </div>
-              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -1178,6 +1381,35 @@ export default function PaiementEchelonnePage({ userId, onBack }: PaiementEchelo
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modales de confirmation et succès */}
+      {showConfirmModal && confirmConfig && (
+        <ConfirmModal
+          isOpen={showConfirmModal}
+          onClose={() => setShowConfirmModal(false)}
+          onConfirm={confirmConfig.onConfirm}
+          title={confirmConfig.title}
+          message={confirmConfig.message}
+          variant={confirmConfig.variant}
+          cancelLabel="Annuler"
+          confirmLabel={confirmConfig.infoOnly ? 'OK' : 'Confirmer'}
+          infoOnly={confirmConfig.infoOnly}
+          loading={confirmConfig.loading ?? actionLoading}
+        />
+      )}
+      {showSuccessModal && (
+        <ConfirmModal
+          isOpen={showSuccessModal}
+          onClose={() => {
+            setShowSuccessModal(false);
+            loadPlans();
+          }}
+          title="Succès"
+          message={successMessage}
+          variant="success"
+          infoOnly
+        />
       )}
     </div>
   );
@@ -1421,4 +1653,91 @@ Si vous avez des questions, n'hésitez pas à contacter ${data.ownerName}${data.
 
 Cordialement,
 L'équipe Mestoits`;
+}
+
+/**
+ * Email HTML pour modification de plan
+ */
+function buildInstallmentPlanModifiedEmail(data: {
+  payerName: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  propertyTitle: string;
+  totalAmount: number;
+  numberOfInstallments: number;
+  installmentAmount: number;
+  firstPaymentAmount?: number;
+  frequency: string;
+  paymentDueDay: number | null;
+  startDate: string;
+  installments: Array<{ number: number; dueDate: string; amount: number }>;
+}): string {
+  const formatPrice = (price: number) => `${price.toLocaleString('fr-FR')} FCFA`;
+  const formatDate = (dateStr: string) => {
+    try {
+      return new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+  const getFrequencyLabel = (f: string) => ({ weekly: 'Hebdomadaire', monthly: 'Mensuel', quarterly: 'Trimestriel' }[f] || f);
+  const paymentDueDayInfo = data.paymentDueDay ? `<p><strong>Jour d'échéance :</strong> Le ${data.paymentDueDay} de chaque mois</p>` : '';
+  const installmentsRows = data.installments.map(inst =>
+    `<tr style="border-bottom: 1px solid #e5e7eb;"><td style="padding: 12px; text-align: center;">${inst.number}</td><td style="padding: 12px;">${formatDate(inst.dueDate)}</td><td style="padding: 12px; text-align: right; font-weight: bold;">${formatPrice(inst.amount)}</td></tr>`
+  ).join('');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;line-height:1.6;color:#333}.container{max-width:600px;margin:0 auto;padding:20px}.header{background:linear-gradient(135deg,#14b8a6 0%,#0d9488 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0}.content{background:#f9fafb;padding:30px;border-radius:0 0 10px 10px}.plan-box{background:white;padding:20px;border-radius:8px;margin:20px 0;border-left:4px solid #10b981}table{width:100%;border-collapse:collapse;margin:15px 0}th{background:#f3f4f6;padding:12px;text-align:left;font-weight:bold}td{padding:12px}.footer{text-align:center;margin-top:30px;color:#6b7280;font-size:12px}.highlight{color:#14b8a6;font-weight:bold}</style></head><body><div class="container"><div class="header"><h1>Plan de paiement modifié</h1></div><div class="content"><p>Bonjour <strong>${data.payerName}</strong>,</p><p>Votre plan de paiement échelonné pour <strong>${data.propertyTitle}</strong> a été modifié par <strong>${data.ownerName}</strong>.</p><div class="plan-box"><h3 style="margin-top:0;color:#10b981">Nouveaux détails du plan</h3><p><strong>Montant total:</strong> <span class="highlight">${formatPrice(data.totalAmount)}</span></p><p><strong>Nombre d'échéances:</strong> ${data.numberOfInstallments}</p>${data.firstPaymentAmount ? `<p><strong>1er paiement:</strong> <span class="highlight">${formatPrice(data.firstPaymentAmount)}</span></p><p><strong>Échéances suivantes:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span></p>` : `<p><strong>Montant par échéance:</strong> <span class="highlight">${formatPrice(data.installmentAmount)}</span></p>`}<p><strong>Fréquence:</strong> ${getFrequencyLabel(data.frequency)}</p><p><strong>Date de début:</strong> ${formatDate(data.startDate)}</p>${paymentDueDayInfo}</div><div class="plan-box"><h3 style="margin-top:0;color:#10b981">Calendrier des échéances</h3><table><thead><tr><th style="text-align:center">N°</th><th>Date</th><th style="text-align:right">Montant</th></tr></thead><tbody>${installmentsRows}</tbody></table></div><p>Si vous avez des questions, contactez ${data.ownerName}${data.ownerEmail ? ` à ${data.ownerEmail}` : ''}${data.ownerPhone ? ` ou ${data.ownerPhone}` : ''}.</p><p>Cordialement,<br><strong>L'équipe Mestoits</strong></p></div><div class="footer"><p>© ${new Date().getFullYear()} Mestoits</p></div></div></body></html>`;
+}
+
+/**
+ * Email texte pour modification de plan
+ */
+function buildInstallmentPlanModifiedEmailText(data: {
+  payerName: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerPhone: string;
+  propertyTitle: string;
+  totalAmount: number;
+  numberOfInstallments: number;
+  installmentAmount: number;
+  firstPaymentAmount?: number;
+  frequency: string;
+  paymentDueDay: number | null;
+  startDate: string;
+  installments: Array<{ number: number; dueDate: string; amount: number }>;
+}): string {
+  const formatPrice = (price: number) => `${price.toLocaleString('fr-FR')} FCFA`;
+  const formatDate = (dateStr: string) => {
+    try {
+      return new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+    } catch {
+      return dateStr;
+    }
+  };
+  const getFrequencyLabel = (f: string) => ({ weekly: 'Hebdomadaire', monthly: 'Mensuel', quarterly: 'Trimestriel' }[f] || f);
+  const list = data.installments.map(inst => `  ${inst.number}. ${formatDate(inst.dueDate)} - ${formatPrice(inst.amount)}`).join('\n');
+  return `Bonjour ${data.payerName},\n\nVotre plan de paiement pour ${data.propertyTitle} a été modifié par ${data.ownerName}.\n\nMontant total: ${formatPrice(data.totalAmount)}\nÉchéances: ${data.numberOfInstallments}\nMontant par échéance: ${formatPrice(data.installmentAmount)}\nFréquence: ${getFrequencyLabel(data.frequency)}\nDate de début: ${formatDate(data.startDate)}\n\nCalendrier:\n${list}\n\nCordialement,\nL'équipe Mestoits`;
+}
+
+/**
+ * Email HTML pour annulation de plan
+ */
+function buildInstallmentPlanCancelledEmail(data: {
+  payerName: string;
+  ownerName: string;
+  propertyTitle: string;
+}): string {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;line-height:1.6;color:#333}.container{max-width:600px;margin:0 auto;padding:20px}.header{background:linear-gradient(135deg,#ef4444 0%,#dc2626 100%);color:white;padding:30px;text-align:center;border-radius:10px 10px 0 0}.content{background:#f9fafb;padding:30px;border-radius:0 0 10px 10px}.footer{text-align:center;margin-top:30px;color:#6b7280;font-size:12px}</style></head><body><div class="container"><div class="header"><h1>Plan de paiement annulé</h1></div><div class="content"><p>Bonjour <strong>${data.payerName}</strong>,</p><p>Le plan de paiement échelonné pour <strong>${data.propertyTitle}</strong> a été annulé par <strong>${data.ownerName}</strong>.</p><p>Si vous avez des questions, n'hésitez pas à contacter le propriétaire.</p><p>Cordialement,<br><strong>L'équipe Mestoits</strong></p></div><div class="footer"><p>© ${new Date().getFullYear()} Mestoits</p></div></div></body></html>`;
+}
+
+/**
+ * Email texte pour annulation de plan
+ */
+function buildInstallmentPlanCancelledEmailText(data: {
+  payerName: string;
+  ownerName: string;
+  propertyTitle: string;
+}): string {
+  return `Bonjour ${data.payerName},\n\nLe plan de paiement échelonné pour ${data.propertyTitle} a été annulé par ${data.ownerName}.\n\nSi vous avez des questions, contactez le propriétaire.\n\nCordialement,\nL'équipe Mestoits`;
 }

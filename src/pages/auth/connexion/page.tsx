@@ -1,10 +1,12 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 
 export default function ConnexionPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get('redirect') || '/';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -18,13 +20,12 @@ export default function ConnexionPage() {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        // L'utilisateur est déjà connecté, rediriger vers la page d'accueil
-        navigate('/');
+        navigate(redirectTo.startsWith('/') ? redirectTo : `/${redirectTo}`, { replace: true });
       }
     };
 
     checkSession();
-  }, [navigate]);
+  }, [navigate, redirectTo]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({
@@ -73,8 +74,8 @@ export default function ConnexionPage() {
           return;
         }
 
-        // Rediriger vers la page d'accueil
-        navigate('/');
+        // Rediriger vers la page demandée ou l'accueil
+        navigate(redirectTo.startsWith('/') ? redirectTo : `/${redirectTo}`, { replace: true });
       }
     } catch (err: any) {
       console.error('Erreur connexion:', err);

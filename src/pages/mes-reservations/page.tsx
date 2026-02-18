@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useEmail } from '../../hooks/useEmail';
 import Navbar from '../../components/feature/Navbar';
@@ -24,6 +24,7 @@ interface Reservation {
   end_date: string;
   nights: number;
   total_amount: number;
+  amount_paid?: number | null;
   status: string;
   created_at: string;
   arrival_signaled_at?: string | null;
@@ -32,19 +33,31 @@ interface Reservation {
 
 export default function MesReservationsPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(true);
   const [userEmail, setUserEmail] = useState<string>('');
+  const [userPhone, setUserPhone] = useState<string>('');
   const [showContactModal, setShowContactModal] = useState(false);
   const [selectedOwner, setSelectedOwner] = useState<{ name?: string; email?: string; phone?: string } | null>(null);
   const [message, setMessage] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
-  const [showCancelModal, setShowCancelModal] = useState(false);
-  const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [selectedReservationForPayment, setSelectedReservationForPayment] = useState<Reservation | null>(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
+  const [processingPayment, setProcessingPayment] = useState(false);
   const [signalingArrival, setSignalingArrival] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const { sendEmail } = useEmail();
+
+  const amountToPay = (r: Reservation) => {
+    if (r.status === 'pending') return r.total_amount;
+    return Math.max(0, r.total_amount - (r.amount_paid ?? 0));
+  };
+  const hasPaymentToMake = (r: Reservation) =>
+    (r.status === 'pending' && r.total_amount > 0) ||
+    (r.status === 'confirmed' && (r.amount_paid ?? 0) > 0 && (r.amount_paid ?? 0) < r.total_amount);
 
   // Réservation commencée = date du jour >= date d'arrivée
   const isReservationStarted = (startDate: string) => {
@@ -62,7 +75,7 @@ export default function MesReservationsPage() {
     !r.arrival_signaled_at;
 
   useEffect(() => {
-    loadUserEmail();
+    loadUserData();
   }, []);
 
   useEffect(() => {
@@ -70,6 +83,42 @@ export default function MesReservationsPage() {
       loadReservations();
     }
   }, [userEmail]);
+
+  // Gestion du retour de paiement Stripe (mes-reservations?payment=success&reservation=xxx&session_id=yyy)
+  const [paymentProcessed, setPaymentProcessed] = useState(false);
+  useEffect(() => {
+    const payment = searchParams.get('payment');
+    const reservationId = searchParams.get('reservation');
+    const sessionId = searchParams.get('session_id');
+    if (payment === 'cancelled') {
+      setSearchParams({});
+      return;
+    }
+    if (payment === 'success' && reservationId && sessionId && !paymentProcessed && userEmail) {
+      setPaymentProcessed(true);
+      (async () => {
+        try {
+          const apiUrl = import.meta.env.VITE_EMAIL_API_URL || '/api';
+          const res = await fetch(`${apiUrl}/confirm-reservation-table-payment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reservationId, sessionId }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (data.success) {
+            await loadReservations();
+            alert('Paiement enregistré avec succès !');
+          } else {
+            alert(data.error || 'Erreur lors de la confirmation du paiement.');
+          }
+        } catch (e: any) {
+          alert('Erreur: ' + (e?.message || 'Erreur inconnue'));
+        } finally {
+          setSearchParams({});
+        }
+      })();
+    }
+  }, [searchParams, setSearchParams, paymentProcessed, userEmail]);
 
   // Quand les réservations sont chargées : envoyer le rappel au locataire si le bouton apparaît
   useEffect(() => {
@@ -102,22 +151,26 @@ export default function MesReservationsPage() {
     sendReminders();
   }, [reservations]);
 
-  const loadUserEmail = async () => {
+  const loadUserData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         const { data: userData } = await supabase
           .from('users_2025_12_01_11_29')
-          .select('email')
+          .select('email, phone')
           .eq('id', user.id)
           .single();
         
         if (userData?.email) {
           setUserEmail(userData.email);
+          setUserPhone(userData.phone || '');
         }
+      } else {
+        const returnUrl = '/mes-reservations' + (window.location.search || '');
+        navigate(`/connexion?redirect=${encodeURIComponent(returnUrl)}`, { replace: true });
       }
     } catch (error) {
-      console.error('Erreur lors du chargement de l\'email:', error);
+      console.error('Erreur lors du chargement des données utilisateur:', error);
     }
   };
 
@@ -125,12 +178,12 @@ export default function MesReservationsPage() {
     try {
       setLoading(true);
       
-      // Charger uniquement les réservations confirmées ou complétées (les pending sont dans reservations_temp)
+      // Charger toutes les réservations (filtre appliqué dans l'UI)
       const { data: reservationsData, error } = await supabase
         .from('reservations')
         .select('*')
         .eq('guest_email', userEmail)
-        .in('status', ['confirmed', 'completed'])
+        .in('status', ['pending', 'confirmed', 'cancelled', 'completed'])
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -139,9 +192,20 @@ export default function MesReservationsPage() {
         return;
       }
 
+      // Marquer automatiquement comme terminées les réservations confirmées dont la date de fin est passée
+      const today = new Date().toISOString().split('T')[0];
+      for (const r of reservationsData || []) {
+        if (r.status === 'confirmed' && r.end_date < today) {
+          await supabase.from('reservations').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', r.id);
+        }
+      }
+      const normalizedData = (reservationsData || []).map((r: any) =>
+        r.status === 'confirmed' && r.end_date < today ? { ...r, status: 'completed' } : r
+      );
+
       // Enrichir avec les données de la propriété et du propriétaire
       const enrichedReservations = await Promise.all(
-        (reservationsData || []).map(async (reservation) => {
+        normalizedData.map(async (reservation) => {
           // Charger les données de la propriété
           const { data: propertyData } = await supabase
             .from('properties_02')
@@ -263,66 +327,71 @@ export default function MesReservationsPage() {
     }
   };
 
-  const handleCancelReservation = (reservation: Reservation) => {
-    setSelectedReservation(reservation);
-    setShowCancelModal(true);
+  const openPaymentModal = (e: React.MouseEvent, reservation: Reservation) => {
+    e.stopPropagation();
+    setSelectedReservationForPayment(reservation);
+    setSelectedPaymentMethod('stripe');
+    setShowPaymentModal(true);
   };
 
-  const confirmCancelReservation = async () => {
-    if (!selectedReservation) return;
+  const handleConfirmPayment = async () => {
+    if (!selectedReservationForPayment) return;
 
-    setCancelling(true);
+    const phone = selectedReservationForPayment.guest_phone || userPhone;
+    if (selectedPaymentMethod === 'paydunya' && !phone?.trim()) {
+      alert('Numéro de téléphone requis pour le paiement Mobile Money. Veuillez le renseigner dans votre profil.');
+      return;
+    }
+
+    setProcessingPayment(true);
     try {
-      // Supprimer la réservation (n'a pas abouti)
-      const { error: deleteError } = await supabase
-        .from('reservations')
-        .delete()
-        .eq('id', selectedReservation.id);
+      const apiUrl = import.meta.env.VITE_EMAIL_API_URL || '/api';
+      const amount = amountToPay(selectedReservationForPayment);
 
-      if (deleteError) {
-        throw deleteError;
-      }
-
-      // Envoyer un email au propriétaire pour l'informer de l'annulation
-      if (selectedReservation.owner_email) {
-        try {
-          await sendEmail('contact_annonce', {
-            ownerEmail: selectedReservation.owner_email,
-            ownerName: selectedReservation.owner_name || 'Propriétaire',
-            visitorName: selectedReservation.guest_name,
-            visitorEmail: selectedReservation.guest_email,
-            propertyTitle: selectedReservation.property_title || 'Bien immobilier',
-            propertyAddress: selectedReservation.property_address && selectedReservation.property_city
-              ? `${selectedReservation.property_address}, ${selectedReservation.property_city}`
-              : '',
-            message: `Bonjour ${selectedReservation.owner_name || 'Propriétaire'},
-
-Nous vous informons que ${selectedReservation.guest_name} a annulé sa réservation pour votre bien "${selectedReservation.property_title || 'Bien immobilier'}".
-
-Détails de la réservation annulée:
-- Dates: Du ${formatDate(selectedReservation.start_date)} au ${formatDate(selectedReservation.end_date)}
-- Nombre de nuits: ${selectedReservation.nights}
-- Montant: ${formatPrice(selectedReservation.total_amount)} FCFA
-
-Cordialement,
-L'équipe Mestoits`,
-          });
-        } catch (emailError) {
-          console.error('Erreur lors de l\'envoi de l\'email au propriétaire:', emailError);
-          // Ne pas bloquer l'annulation si l'email échoue
+      if (selectedPaymentMethod === 'stripe') {
+        const res = await fetch(`${apiUrl}/create-reservation-table-payment-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reservationId: selectedReservationForPayment.id,
+            guestEmail: userEmail,
+            origin: window.location.origin,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.success && data.url) {
+          window.location.href = data.url;
+          return;
+        }
+        throw new Error(data.error || 'Erreur lors de la création de la session de paiement.');
+      } else {
+        const res = await fetch(`${apiUrl}/create-reservation-table-paydunya-payment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reservationId: selectedReservationForPayment.id,
+            guestEmail: userEmail,
+            guestPhone: phone,
+            origin: window.location.origin,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data.success) {
+          alert(
+            'Demande de paiement Mobile Money envoyée ! Un SMS avec le code a été envoyé. Complétez le paiement puis actualisez la page.'
+          );
+          setShowPaymentModal(false);
+          setSelectedReservationForPayment(null);
+          await loadReservations();
+        } else {
+          throw new Error(data.error || 'Erreur lors de la création du paiement.');
         }
       }
-
-      alert('Réservation annulée avec succès. Le propriétaire a été informé.');
-      setShowCancelModal(false);
-      setSelectedReservation(null);
-      // Recharger les réservations
-      await loadReservations();
-    } catch (error: any) {
-      console.error('Erreur lors de l\'annulation de la réservation:', error);
-      alert(`Erreur lors de l'annulation: ${error.message || 'Erreur inconnue'}`);
+    } catch (err: any) {
+      console.error('Erreur paiement:', err);
+      alert('Erreur: ' + (err?.message || 'Erreur inconnue'));
     } finally {
-      setCancelling(false);
+      setProcessingPayment(false);
     }
   };
 
@@ -416,8 +485,38 @@ L'équipe Mestoits`,
               <p className="text-gray-500 text-sm">Vos réservations de location courte durée apparaîtront ici</p>
             </div>
           ) : (
+            <>
+            {/* Filtre par statut */}
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[
+                { value: 'all', label: 'Toutes' },
+                { value: 'pending', label: 'En attente' },
+                { value: 'confirmed', label: 'Confirmées' },
+                { value: 'cancelled', label: 'Annulées' },
+                { value: 'completed', label: 'Terminées' },
+              ].map((opt) => (
+                <button
+                  key={opt.value}
+                  onClick={() => setStatusFilter(opt.value)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    statusFilter === opt.value
+                      ? 'bg-teal-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <div className="space-y-4">
-              {reservations.map((reservation) => (
+              {(() => {
+                const filteredReservations = statusFilter === 'all' ? reservations : reservations.filter((r) => r.status === statusFilter);
+                return filteredReservations.length === 0 ? (
+                  <div className="text-center py-12 bg-white rounded-lg shadow-sm">
+                    <p className="text-gray-600">Aucune réservation pour ce filtre</p>
+                  </div>
+                ) : (
+                  filteredReservations.map((reservation) => (
                 <div 
                   key={reservation.id} 
                   onClick={() => navigate(`/bien/${reservation.property_id}`)}
@@ -434,9 +533,18 @@ L'équipe Mestoits`,
                           : 'Adresse non disponible'}
                       </p>
                     </div>
-                    <span className={`px-2 sm:px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${getStatusColor(reservation.status)}`}>
-                      {getStatusLabel(reservation.status)}
-                    </span>
+                    <div>
+                      <span className={`px-2 sm:px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap ${getStatusColor(reservation.status)}`}>
+                        {getStatusLabel(reservation.status)}
+                      </span>
+                      {reservation.status === 'confirmed' &&
+                        (reservation.amount_paid ?? 0) > 0 &&
+                        (reservation.amount_paid ?? 0) < reservation.total_amount && (
+                        <div className="mt-1 text-xs text-amber-700">
+                          Surplus à payer: {formatPrice(reservation.total_amount - (reservation.amount_paid ?? 0))} FCFA
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -456,6 +564,12 @@ L'équipe Mestoits`,
                       <span className="text-sm text-gray-600">Montant total:</span>
                       <span className="ml-2 font-semibold text-teal-600">{formatPrice(reservation.total_amount)} FCFA</span>
                     </div>
+                    {(reservation.amount_paid ?? 0) > 0 && (
+                      <div>
+                        <span className="text-sm text-gray-600">Montant payé:</span>
+                        <span className="ml-2 font-medium text-green-600">{formatPrice(reservation.amount_paid ?? 0)} FCFA</span>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between pt-4 border-t border-gray-200 gap-3">
@@ -476,6 +590,15 @@ L'équipe Mestoits`,
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
+                      {hasPaymentToMake(reservation) && (
+                        <button
+                          onClick={(e) => openPaymentModal(e, reservation)}
+                          className="px-3 sm:px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
+                        >
+                          <i className="ri-bank-card-line text-sm sm:text-base"></i>
+                          Payer {formatPrice(amountToPay(reservation))} FCFA
+                        </button>
+                      )}
                       {showArrivalButton(reservation) && (
                         <button
                           onClick={(e) => handleSignalArrival(e, reservation)}
@@ -495,33 +618,35 @@ L'équipe Mestoits`,
                           )}
                         </button>
                       )}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          generateReservationReceiptPDF({
-                            id: reservation.id,
-                            property_title: reservation.property_title || 'Bien immobilier',
-                            property_address: reservation.property_address,
-                            property_city: reservation.property_city,
-                            owner_name: reservation.owner_name || 'Propriétaire',
-                            owner_email: reservation.owner_email,
-                            owner_phone: reservation.owner_phone,
-                            guest_name: reservation.guest_name,
-                            guest_email: reservation.guest_email,
-                            guest_phone: reservation.guest_phone,
-                            start_date: reservation.start_date,
-                            end_date: reservation.end_date,
-                            nights: reservation.nights,
-                            total_amount: reservation.total_amount,
-                            status: reservation.status,
-                            created_at: reservation.created_at,
-                          });
-                        }}
-                        className="px-3 sm:px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
-                      >
-                        <i className="ri-file-download-line text-sm sm:text-base"></i>
-                        <span>Télécharger le récépissé</span>
-                      </button>
+                      {reservation.status !== 'pending' && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            generateReservationReceiptPDF({
+                              id: reservation.id,
+                              property_title: reservation.property_title || 'Bien immobilier',
+                              property_address: reservation.property_address,
+                              property_city: reservation.property_city,
+                              owner_name: reservation.owner_name || 'Propriétaire',
+                              owner_email: reservation.owner_email,
+                              owner_phone: reservation.owner_phone,
+                              guest_name: reservation.guest_name,
+                              guest_email: reservation.guest_email,
+                              guest_phone: reservation.guest_phone,
+                              start_date: reservation.start_date,
+                              end_date: reservation.end_date,
+                              nights: reservation.nights,
+                              total_amount: reservation.total_amount,
+                              status: reservation.status,
+                              created_at: reservation.created_at,
+                            });
+                          }}
+                          className="px-3 sm:px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-xs sm:text-sm font-medium flex items-center gap-1 sm:gap-2"
+                        >
+                          <i className="ri-file-download-line text-sm sm:text-base"></i>
+                          <span>Télécharger le récépissé</span>
+                        </button>
+                      )}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -539,22 +664,25 @@ L'équipe Mestoits`,
                     </div>
                   </div>
                 </div>
-              ))}
+                  ))
+                );
+              })()}
             </div>
+            </>
           )}
         </div>
       </main>
 
-      {/* Modal d'annulation */}
-      {showCancelModal && selectedReservation && (
+      {/* Modal de paiement */}
+      {showPaymentModal && selectedReservationForPayment && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-md w-full p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-bold text-gray-900">Annuler la réservation</h3>
+              <h3 className="text-xl font-bold text-gray-900">Paiement</h3>
               <button
                 onClick={() => {
-                  setShowCancelModal(false);
-                  setSelectedReservation(null);
+                  setShowPaymentModal(false);
+                  setSelectedReservationForPayment(null);
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
@@ -562,45 +690,75 @@ L'équipe Mestoits`,
               </button>
             </div>
 
-            <div className="mb-4">
-              <p className="text-gray-700 mb-4">
-                Êtes-vous sûr de vouloir annuler cette réservation ? Cette action est irréversible.
+            <div className="mb-4 space-y-2">
+              <p className="text-sm text-gray-600">
+                <strong>{selectedReservationForPayment.property_title || 'Bien immobilier'}</strong>
               </p>
-              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm">
-                <div>
-                  <span className="text-gray-600">Bien: </span>
-                  <span className="font-medium text-gray-900">{selectedReservation.property_title || 'Bien immobilier'}</span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Dates: </span>
-                  <span className="font-medium text-gray-900">
-                    {formatDate(selectedReservation.start_date)} - {formatDate(selectedReservation.end_date)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-gray-600">Montant: </span>
-                  <span className="font-medium text-gray-900">{formatPrice(selectedReservation.total_amount)} FCFA</span>
-                </div>
+              <p className="text-lg font-semibold text-teal-600">
+                Montant: {formatPrice(amountToPay(selectedReservationForPayment))} FCFA
+              </p>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <p className="text-sm font-medium text-gray-700">Mode de paiement</p>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => setSelectedPaymentMethod('stripe')}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    selectedPaymentMethod === 'stripe'
+                      ? 'border-teal-500 bg-teal-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <i className="ri-bank-card-line text-2xl text-teal-600 mb-2"></i>
+                  <div className="font-medium text-gray-900">Carte bancaire</div>
+                  <div className="text-xs text-gray-600">Stripe</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPaymentMethod('paydunya')}
+                  className={`p-4 rounded-lg border-2 transition-all text-left ${
+                    selectedPaymentMethod === 'paydunya'
+                      ? 'border-teal-500 bg-teal-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <i className="ri-smartphone-line text-2xl text-amber-600 mb-2"></i>
+                  <div className="font-medium text-gray-900">Mobile Money</div>
+                  <div className="text-xs text-gray-600">PayDunya</div>
+                </button>
               </div>
+              {selectedPaymentMethod === 'paydunya' && (
+                <p className="text-xs text-amber-700">
+                  Un SMS avec le code de paiement sera envoyé à votre numéro.
+                </p>
+              )}
             </div>
 
             <div className="flex gap-3">
               <button
                 onClick={() => {
-                  setShowCancelModal(false);
-                  setSelectedReservation(null);
+                  setShowPaymentModal(false);
+                  setSelectedReservationForPayment(null);
                 }}
                 className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-                disabled={cancelling}
               >
-                Retour
+                Annuler
               </button>
               <button
-                onClick={confirmCancelReservation}
-                disabled={cancelling}
-                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleConfirmPayment}
+                disabled={processingPayment}
+                className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
-                {cancelling ? 'Annulation...' : 'Confirmer l\'annulation'}
+                {processingPayment ? (
+                  <>
+                    <i className="ri-loader-4-line animate-spin"></i>
+                    Redirection...
+                  </>
+                ) : (
+                  'Payer'
+                )}
               </button>
             </div>
           </div>

@@ -296,7 +296,7 @@ export default function LeaseContractPreview({
             ) : (
               <>
                 <br />
-                (Signature précédée dcce la mention &quot;Lu et approuvé&quot;)
+                (Signature précédée de la mention &quot;Lu et approuvé&quot;)
                 <br />
               </>
             )}

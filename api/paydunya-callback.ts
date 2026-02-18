@@ -97,7 +97,7 @@ export default async function handler(
     
     // Option 1: Si PayDunya retourne les métadonnées dans le callback
     const metadata = callbackData.metadata || callbackData.data?.metadata || {};
-    const paymentType = metadata.type || 'rent_payment'; // Par défaut, paiement de loyer
+    let paymentType = metadata.type || 'rent_payment'; // Par défaut, paiement de loyer
     let paymentId = metadata.paymentId || metadata.payment_id;
     let reservationId = metadata.reservationId || metadata.reservation_id;
 
@@ -165,12 +165,81 @@ export default async function handler(
 
         if (tempData) {
           reservationId = tempData.id;
+          paymentType = 'reservation_payment';
           console.log(`✅ Réservation temporaire trouvée par référence: ${reservationId}`);
+        } else {
+          const { data: tableResa } = await supabaseAdmin
+            .from('reservations')
+            .select('id')
+            .like('notes', `%Référence PayDunya: ${referenceNumber}%`)
+            .maybeSingle();
+
+          if (tableResa) {
+            reservationId = tableResa.id;
+            paymentType = 'reservation_table_payment';
+            console.log(`✅ Réservation (table) trouvée par référence: ${reservationId}`);
+          }
         }
       }
     }
 
-    if (paymentType === 'reservation_payment' && reservationId) {
+    if (paymentType === 'reservation_table_payment' && reservationId) {
+      console.log(`🔄 Mise à jour réservation (table) ${reservationId}...`);
+
+      const { data: resa, error: fetchErr } = await supabaseAdmin
+        .from('reservations')
+        .select('id, status, total_amount, amount_paid')
+        .eq('id', reservationId)
+        .single();
+
+      if (fetchErr || !resa) {
+        console.error('❌ Réservation introuvable:', fetchErr);
+        return res.status(500).json({
+          success: false,
+          error: 'Réservation introuvable'
+        });
+      }
+
+      const amountPaid = Number(resa.amount_paid ?? 0);
+      const totalAmount = Number(resa.total_amount ?? 0);
+      const newAmountPaid = totalAmount; // Le client a payé le montant restant (total ou surplus)
+
+      const updateData: Record<string, any> = {
+        amount_paid: newAmountPaid,
+        updated_at: new Date().toISOString(),
+      };
+      if (resa.status === 'pending') {
+        updateData.status = 'confirmed';
+      }
+
+      const { error: updateErr } = await supabaseAdmin
+        .from('reservations')
+        .update(updateData)
+        .eq('id', reservationId);
+
+      if (updateErr) {
+        console.error('❌ Erreur mise à jour réservation:', updateErr);
+        return res.status(500).json({
+          success: false,
+          error: 'Erreur lors de la mise à jour de la réservation'
+        });
+      }
+
+      if (resa.status === 'pending') {
+        try {
+          const { processCommission } = await import('./utils/commissionHandler');
+          await processCommission('reservation', reservationId, null, totalAmount);
+        } catch (commissionError) {
+          console.error('⚠️ Erreur commission:', commissionError);
+        }
+      }
+
+      console.log(`✅ Réservation ${reservationId} mise à jour (amount_paid=${newAmountPaid}, status=${updateData.status || resa.status})`);
+      return res.status(200).json({
+        success: true,
+        message: 'Paiement réservation enregistré'
+      });
+    } else if (paymentType === 'reservation_payment' && reservationId) {
       console.log(`🔄 Transfert réservation_temp ${reservationId} → reservations...`);
 
       const { data: tempData, error: fetchError } = await supabaseAdmin
@@ -199,7 +268,9 @@ export default async function handler(
           end_date: tempData.end_date,
           nights: tempData.nights,
           total_amount: tempData.total_amount,
+          amount_paid: tempData.total_amount,
           status: 'confirmed',
+          source: 'platform',
           notes: `Référence PayDunya: ${referenceNumber} - Paiement confirmé le ${new Date().toISOString()}`,
         }])
         .select('id')

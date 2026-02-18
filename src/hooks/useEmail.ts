@@ -51,7 +51,10 @@ type EmailType =
   | 'document_professionnel_rejete'
   | 'professionnel_certifie'
   | 'arrival_reminder'
-  | 'arrival_signaled';
+  | 'arrival_signaled'
+  | 'reservation_created'
+  | 'reservation_modified'
+  | 'owner_message_to_guest';
 
 interface EmailResponse {
   success: boolean;
@@ -340,6 +343,12 @@ function buildEmailPayload(
       return buildArrivalReminderEmail(data);
     case 'arrival_signaled':
       return buildArrivalSignaledEmail(data);
+    case 'reservation_created':
+      return buildReservationCreatedEmail(data);
+    case 'reservation_modified':
+      return buildReservationModifiedEmail(data);
+    case 'owner_message_to_guest':
+      return buildOwnerMessageToGuestEmail(data);
     default:
       console.warn(`Type d'email non implémenté: ${type}`);
       return null;
@@ -1906,6 +1915,258 @@ Cet email a été envoyé depuis la plateforme Mestoits`;
   return {
     to: receiverEmail,
     subject: `Nouveau contact pour votre bien: ${propertyTitle} - Mestoits`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Notification client : propriétaire a créé une réservation pour lui
+ */
+function buildReservationCreatedEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const guestEmail = data.guestEmail as string;
+  const guestName = data.guestName as string;
+  const ownerName = data.ownerName as string;
+  const propertyTitle = data.propertyTitle as string;
+  const startDate = data.startDate as string;
+  const endDate = data.endDate as string;
+  const nights = data.nights as number;
+  const totalAmount = data.totalAmount as number;
+  const appUrl = (data.appUrl as string) || 'https://mestoits.com';
+  const isPending = (data.isPending as boolean) ?? true;
+
+  if (!guestEmail || !propertyTitle) {
+    console.error('Données manquantes pour reservation_created');
+    return null;
+  }
+
+  const mesReservationsUrl = `${appUrl}/mes-reservations`;
+  const formatDate = (d: string) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  const formatPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(n);
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; padding: 12px 24px; background: #0d9488; color: white; text-decoration: none; border-radius: 8px; margin: 16px 0; font-weight: 600; }
+    .info-box { background: white; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #0d9488; }
+    .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0;">📅 Nouvelle réservation</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour ${guestName || 'Client'},</p>
+      <p><strong>${ownerName || 'Le propriétaire'}</strong> a créé une réservation pour vous concernant <strong>${propertyTitle}</strong>.</p>
+      <div class="info-box">
+        <p><strong>Dates :</strong> Du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuit${nights > 1 ? 's' : ''})</p>
+        <p><strong>Montant total :</strong> ${formatPrice(totalAmount)} FCFA</p>
+      </div>
+      ${isPending ? `
+      <p>Cette réservation est en attente de paiement. Cliquez sur le bouton ci-dessous pour procéder au paiement :</p>
+      <p style="text-align: center;">
+        <a href="${mesReservationsUrl}" class="button">Payer ma réservation</a>
+      </p>
+      ` : '<p>La réservation a été confirmée.</p>'}
+      <div class="footer">
+        <p>Cet email a été envoyé depuis la plateforme Mestoits</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${guestName || 'Client'},
+
+${ownerName || 'Le propriétaire'} a créé une réservation pour vous concernant ${propertyTitle}.
+
+Dates : Du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuits)
+Montant total : ${formatPrice(totalAmount)} FCFA
+${isPending ? `\nRendez-vous sur ${mesReservationsUrl} pour procéder au paiement.` : ''}
+
+---
+Mestoits`;
+
+  return {
+    to: guestEmail,
+    subject: `Nouvelle réservation - ${propertyTitle} - Mestoits`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Notification client : le propriétaire a modifié sa réservation
+ */
+function buildReservationModifiedEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const guestEmail = data.guestEmail as string;
+  const guestName = data.guestName as string;
+  const ownerName = data.ownerName as string;
+  const propertyTitle = data.propertyTitle as string;
+  const startDate = data.startDate as string;
+  const endDate = data.endDate as string;
+  const nights = data.nights as number;
+  const totalAmount = data.totalAmount as number;
+  const amountPaid = (data.amountPaid as number) ?? 0;
+  const surplus = Math.max(0, Number(totalAmount) - Number(amountPaid));
+  const appUrl = (data.appUrl as string) || 'https://mestoits.com';
+
+  if (!guestEmail || !propertyTitle) {
+    console.error('Données manquantes pour reservation_modified');
+    return null;
+  }
+
+  const mesReservationsUrl = `${appUrl}/mes-reservations`;
+  const formatDate = (d: string) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  const formatPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(n);
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+    .button { display: inline-block; padding: 12px 24px; background: #0d9488; color: white; text-decoration: none; border-radius: 8px; margin: 16px 0; font-weight: 600; }
+    .info-box { background: white; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #f59e0b; }
+    .surplus { background: #fef3c7; padding: 12px; border-radius: 8px; margin: 12px 0; }
+    .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0;">✏️ Réservation modifiée</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour ${guestName || 'Client'},</p>
+      <p><strong>${ownerName || 'Le propriétaire'}</strong> a modifié votre réservation concernant <strong>${propertyTitle}</strong>.</p>
+      <div class="info-box">
+        <p><strong>Nouvelles dates :</strong> Du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuit${nights > 1 ? 's' : ''})</p>
+        <p><strong>Nouveau montant total :</strong> ${formatPrice(totalAmount)} FCFA</p>
+        ${surplus > 0 ? `<div class="surplus"><p><strong>Montant restant à payer :</strong> ${formatPrice(surplus)} FCFA</p><p>Rendez-vous sur vos réservations pour régler le surplus.</p></div>` : ''}
+      </div>
+      <p style="text-align: center;">
+        <a href="${mesReservationsUrl}" class="button">Voir ma réservation</a>
+      </p>
+      <div class="footer">
+        <p>Cet email a été envoyé depuis la plateforme Mestoits</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${guestName || 'Client'},
+
+${ownerName || 'Le propriétaire'} a modifié votre réservation concernant ${propertyTitle}.
+
+Nouvelles dates : Du ${formatDate(startDate)} au ${formatDate(endDate)} (${nights} nuits)
+Nouveau montant total : ${formatPrice(totalAmount)} FCFA
+${surplus > 0 ? `\nMontant restant à payer : ${formatPrice(surplus)} FCFA\nRendez-vous sur ${mesReservationsUrl} pour régler le surplus.` : ''}
+
+---
+Mestoits`;
+
+  return {
+    to: guestEmail,
+    subject: `Réservation modifiée - ${propertyTitle} - Mestoits`,
+    html,
+    text,
+  };
+}
+
+/**
+ * Message du propriétaire au client (réservation)
+ */
+function buildOwnerMessageToGuestEmail(data: Record<string, unknown>): {
+  to: string;
+  subject: string;
+  html: string;
+  text: string;
+} | null {
+  const guestEmail = data.guestEmail as string;
+  const guestName = data.guestName as string;
+  const ownerName = data.ownerName as string;
+  const propertyTitle = data.propertyTitle as string;
+  const message = data.message as string;
+  const appUrl = (data.appUrl as string) || 'https://mestoits.com';
+
+  if (!guestEmail || !message) {
+    console.error('Données manquantes pour owner_message_to_guest');
+    return null;
+  }
+
+  const mesReservationsUrl = `${appUrl}/mes-reservations`;
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+    .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); color: white; padding: 24px; text-align: center; border-radius: 10px 10px 0 0; }
+    .content { background: #f9fafb; padding: 24px; border-radius: 0 0 10px 10px; }
+    .message-box { background: white; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #0d9488; white-space: pre-wrap; }
+    .button { display: inline-block; padding: 12px 24px; background: #0d9488; color: white; text-decoration: none; border-radius: 8px; margin: 16px 0; font-weight: 600; }
+    .footer { text-align: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; color: #6b7280; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin: 0;">💬 Message de votre propriétaire</h1>
+    </div>
+    <div class="content">
+      <p>Bonjour ${guestName || 'Client'},</p>
+      <p><strong>${ownerName || 'Le propriétaire'}</strong> vous a envoyé un message concernant votre réservation pour <strong>${propertyTitle || 'votre bien'}</strong> :</p>
+      <div class="message-box">${(message as string).replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+      <p style="text-align: center;">
+        <a href="${mesReservationsUrl}" class="button">Répondre</a>
+      </p>
+      <div class="footer">
+        <p>Cet email a été envoyé depuis la plateforme Mestoits</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const text = `Bonjour ${guestName || 'Client'},
+
+${ownerName || 'Le propriétaire'} vous a envoyé un message concernant votre réservation pour ${propertyTitle || 'votre bien'} :
+
+${message}
+
+Rendez-vous sur ${mesReservationsUrl} pour répondre.
+
+---
+Mestoits`;
+
+  return {
+    to: guestEmail,
+    subject: `Message de votre propriétaire - ${propertyTitle || 'Réservation'} - Mestoits`,
     html,
     text,
   };

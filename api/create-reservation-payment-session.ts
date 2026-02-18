@@ -38,18 +38,21 @@ export default async function handler(
       propertyTitle, 
       guestEmail, 
       guestName, 
+      guestPhone,
       startDate,
       endDate,
       nights,
       reservationId,
-      origin 
+      origin,
+      successPath,
+      cancelPath
     } = req.body;
 
     // Validation
-    if (!amount || !propertyId || !propertyTitle || !guestEmail || !startDate || !endDate || !nights || !origin) {
+    if (!amount || !propertyTitle || !guestEmail || !startDate || !endDate || !nights || !origin) {
       return res.status(400).json({
         success: false,
-        error: "Paramètres manquants: amount, propertyId, propertyTitle, guestEmail, startDate, endDate, nights et origin sont requis"
+        error: "Paramètres manquants: amount, propertyTitle, guestEmail, startDate, endDate, nights et origin sont requis"
       });
     }
 

@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../../lib/supabase';
+import { useEmail } from '../../../hooks/useEmail';
 import { generateReservationReceiptPDF } from '../../../utils/reservationReceiptPdfGenerator';
 import DateRangeCalendar from '../../bien-detail/components/DateRangeCalendar';
+import ConfirmModal from '../../../components/ui/ConfirmModal';
 
 interface ReservationsPageProps {
   userId: string;
@@ -19,7 +21,9 @@ interface Reservation {
   end_date: string;
   nights: number;
   total_amount: number;
+  amount_paid?: number | null;
   status: string;
+  source?: string;
   created_at: string;
 }
 
@@ -43,9 +47,35 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
   const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
   const [selectedPropertyPrice, setSelectedPropertyPrice] = useState<number | null>(null);
   const [selectedPropertyMinNights, setSelectedPropertyMinNights] = useState<number | null>(null);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [contactReservation, setContactReservation] = useState<Reservation | null>(null);
+  const [contactMessage, setContactMessage] = useState('');
+  const [sendingContact, setSendingContact] = useState(false);
+  const { sendEmail } = useEmail();
+  const [ownerName, setOwnerName] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [confirmConfig, setConfirmConfig] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    variant?: 'default' | 'danger' | 'success';
+    infoOnly?: boolean;
+  } | null>(null);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     loadProperties();
+  }, [userId]);
+
+  useEffect(() => {
+    const loadOwnerName = async () => {
+      if (!userId) return;
+      const { data } = await supabase.from('users_2025_12_01_11_29').select('full_name').eq('id', userId).single();
+      setOwnerName(data?.full_name || 'Propriétaire');
+    };
+    loadOwnerName();
   }, [userId]);
 
   useEffect(() => {
@@ -169,12 +199,23 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
         throw error;
       }
 
-      // Filtrer : biens courte durée + exclure les réservations qui n'ont pas abouti (cancelled)
+      // Filtrer : biens courte durée uniquement (inclure cancelled, filtre appliqué dans l'UI)
       const shortTermRentalPropertyIds = properties.map(p => p.id);
-      const filteredReservations = (data || []).filter((reservation: any) => 
-        shortTermRentalPropertyIds.includes(reservation.property_id) &&
-        ['pending', 'confirmed', 'completed'].includes(reservation.status)
+      const filteredReservations = (data || []).filter((reservation: any) =>
+        shortTermRentalPropertyIds.includes(reservation.property_id)
       );
+
+      // Marquer automatiquement comme terminées les réservations confirmées dont la date de fin est passée
+      const today = new Date().toISOString().split('T')[0];
+      const toComplete = filteredReservations.filter((r: any) => r.status === 'confirmed' && r.end_date < today);
+      if (toComplete.length > 0) {
+        for (const r of toComplete) {
+          await supabase.from('reservations').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', r.id);
+        }
+        filteredReservations.forEach((r: any) => {
+          if (r.status === 'confirmed' && r.end_date < today) r.status = 'completed';
+        });
+      }
 
       // Enrichir avec les détails des propriétés
       const reservationsWithDetails = await Promise.all(
@@ -213,41 +254,90 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
     }
   }, [form.start_date, form.end_date, selectedPropertyPrice, editingReservation]);
 
-  const handleSubmit = async () => {
+  const validateForm = (): string | null => {
     if (!form.property_id || !form.guest_name || !form.guest_email || !form.start_date || !form.end_date) {
-      alert('Veuillez remplir tous les champs obligatoires');
-      return;
+      return 'Veuillez remplir tous les champs obligatoires';
     }
-
     const nights = calculateNights(form.start_date, form.end_date);
-    if (nights === 0) {
-      alert('La date de fin doit être après la date de début');
-      return;
-    }
-
+    if (nights === 0) return 'La date de fin doit être après la date de début';
     if (selectedPropertyMinNights != null && nights < selectedPropertyMinNights) {
-      alert(`Le séjour minimum est de ${selectedPropertyMinNights} nuitée${selectedPropertyMinNights > 1 ? 's' : ''}. Veuillez sélectionner plus de nuits.`);
-      return;
+      return `Le séjour minimum est de ${selectedPropertyMinNights} nuitée${selectedPropertyMinNights > 1 ? 's' : ''}. Veuillez sélectionner plus de nuits.`;
     }
-
     const selectedStart = new Date(form.start_date);
     const selectedEnd = new Date(form.end_date);
     const hasConflict = unavailableDates.some((date) => {
       const d = new Date(date);
       return d >= selectedStart && d <= selectedEnd;
     });
-    if (hasConflict) {
-      alert('Les dates sélectionnées chevauchent des périodes déjà réservées ou indisponibles. Veuillez choisir d\'autres dates.');
+    if (hasConflict) return 'Les dates sélectionnées chevauchent des périodes déjà réservées ou indisponibles.';
+    const totalAmount = form.total_amount && String(form.total_amount).trim()
+      ? parseFloat(String(form.total_amount).replace(/\s/g, '').replace(',', '.'))
+      : calculatedAmount;
+    if (isNaN(totalAmount) || totalAmount <= 0) return 'Veuillez saisir un montant valide pour la réservation.';
+    return null;
+  };
+
+  const handleSubmitClick = () => {
+    const isPlatform = editingReservation?.source === 'platform';
+    if (isPlatform) {
+      setConfirmConfig({
+        title: 'Confirmer la modification',
+        message: `Modifier le statut de cette réservation en "${form.status === 'pending' ? 'En attente' : form.status === 'confirmed' ? 'Confirmée' : form.status === 'cancelled' ? 'Annulée' : 'Terminée'}" ?`,
+        onConfirm: () => { setShowConfirmModal(false); doSubmit(); },
+      });
+      setShowConfirmModal(true);
+      return;
+    }
+    const err = validateForm();
+    if (err) {
+      setConfirmConfig({ title: 'Erreur', message: err, onConfirm: () => setShowConfirmModal(false), variant: 'danger' });
+      setShowConfirmModal(true);
+      return;
+    }
+    setConfirmConfig({
+      title: editingReservation ? 'Confirmer la modification' : 'Confirmer l\'ajout',
+      message: editingReservation
+        ? 'Êtes-vous sûr de vouloir modifier cette réservation ?'
+        : 'Êtes-vous sûr de vouloir ajouter cette réservation ?',
+      onConfirm: () => {
+        setShowConfirmModal(false);
+        doSubmit();
+      },
+    });
+    setShowConfirmModal(true);
+  };
+
+  const doSubmit = async () => {
+    const isPlatform = editingReservation?.source === 'platform';
+    if (isPlatform) {
+      setActionLoading(true);
+      try {
+        const { error } = await supabase
+          .from('reservations')
+          .update({ status: form.status, updated_at: new Date().toISOString() })
+          .eq('id', editingReservation!.id);
+        if (error) throw error;
+        setSuccessMessage('Statut de la réservation mis à jour.');
+        setShowSuccessModal(true);
+        setShowModal(false);
+        setEditingReservation(null);
+        await loadReservations();
+      } catch (e: any) {
+        setConfirmConfig({ title: 'Erreur', message: e?.message || 'Erreur inconnue', onConfirm: () => setShowConfirmModal(false), variant: 'danger', infoOnly: true });
+        setShowConfirmModal(true);
+      } finally {
+        setActionLoading(false);
+      }
       return;
     }
 
-    const totalAmount = form.total_amount && form.total_amount.trim()
-      ? parseFloat(form.total_amount.replace(/\s/g, '').replace(',', '.'))
+    const err = validateForm();
+    if (err) return;
+
+    const nights = calculateNights(form.start_date, form.end_date);
+    const totalAmount = form.total_amount && String(form.total_amount).trim()
+      ? parseFloat(String(form.total_amount).replace(/\s/g, '').replace(',', '.'))
       : calculatedAmount;
-    if (isNaN(totalAmount) || totalAmount <= 0) {
-      alert('Veuillez saisir un montant valide pour la réservation.');
-      return;
-    }
 
     setActionLoading(true);
     try {
@@ -261,24 +351,64 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
         end_date: form.end_date,
         nights: nights,
         total_amount: totalAmount,
-        status: form.status
+        status: form.status,
+        source: 'owner',
       };
 
       if (editingReservation) {
+        // Ne pas écraser amount_paid lors de la modification (pour gérer le surplus)
+        const updateData: any = { ...reservationData, updated_at: new Date().toISOString() };
+        delete updateData.amount_paid;
         const { error } = await supabase
           .from('reservations')
-          .update(reservationData)
+          .update(updateData)
           .eq('id', editingReservation.id);
 
         if (error) throw error;
-        alert('Réservation modifiée avec succès !');
+
+        try {
+          await sendEmail('reservation_modified', {
+            guestEmail: form.guest_email,
+            guestName: form.guest_name,
+            ownerName,
+            propertyTitle: properties.find((p: any) => p.id === form.property_id)?.title || 'Bien immobilier',
+            startDate: form.start_date,
+            endDate: form.end_date,
+            nights,
+            totalAmount: totalAmount,
+            amountPaid: (editingReservation as any).amount_paid ?? 0,
+            appUrl: window.location.origin,
+          });
+        } catch (e) {
+          console.warn('Email de modification non envoyé:', e);
+        }
+        setSuccessMessage('Réservation modifiée avec succès.');
+        setShowSuccessModal(true);
       } else {
         const { error } = await supabase
           .from('reservations')
           .insert([reservationData]);
 
         if (error) throw error;
-        alert('Réservation ajoutée avec succès !');
+
+        try {
+          await sendEmail('reservation_created', {
+            guestEmail: form.guest_email,
+            guestName: form.guest_name,
+            ownerName,
+            propertyTitle: properties.find((p: any) => p.id === form.property_id)?.title || 'Bien immobilier',
+            startDate: form.start_date,
+            endDate: form.end_date,
+            nights,
+            totalAmount: totalAmount,
+            isPending: form.status === 'pending',
+            appUrl: window.location.origin,
+          });
+        } catch (e) {
+          console.warn('Email de création non envoyé:', e);
+        }
+        setSuccessMessage('Réservation ajoutée avec succès.');
+        setShowSuccessModal(true);
       }
 
       setShowModal(false);
@@ -296,35 +426,59 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
       await loadReservations();
     } catch (error: any) {
       console.error('Erreur:', error);
-      if (error.message?.includes('does not exist')) {
-        alert('La table reservations n\'existe pas encore. Veuillez créer la table dans Supabase.');
-      } else {
-        alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
-      }
+      const msg = error.message?.includes('does not exist')
+        ? "La table reservations n'existe pas encore. Veuillez créer la table dans Supabase."
+        : `Erreur: ${error.message || 'Erreur inconnue'}`;
+      setConfirmConfig({
+        title: 'Erreur',
+        message: msg,
+        onConfirm: () => setShowConfirmModal(false),
+        variant: 'danger',
+        infoOnly: true,
+      });
+      setShowConfirmModal(true);
     } finally {
       setActionLoading(false);
     }
   };
 
-  const handleCancel = async (reservation: Reservation) => {
-    if (reservation.status === 'cancelled') return;
-    if (!confirm(`Êtes-vous sûr de vouloir annuler cette réservation ? L'argent quittera le solde potentiel.`)) return;
-
-    try {
-      const { error } = await supabase
-        .from('reservations')
-        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-        .eq('id', reservation.id);
-
-      if (error) throw error;
-      alert('Réservation annulée.');
-      await loadReservations();
-    } catch (error: any) {
-      console.error('Erreur:', error);
-      alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
-    }
+  const handleContactClient = (reservation: Reservation) => {
+    setContactReservation(reservation);
+    setContactMessage('');
+    setShowContactModal(true);
   };
 
+  const handleSendContactMessage = async () => {
+    if (!contactReservation || !contactMessage.trim()) return;
+
+    setSendingContact(true);
+    try {
+      const result = await sendEmail('owner_message_to_guest', {
+        guestEmail: contactReservation.guest_email,
+        guestName: contactReservation.guest_name,
+        ownerName,
+        propertyTitle: contactReservation.property_title || 'Votre réservation',
+        message: contactMessage.trim(),
+        appUrl: window.location.origin,
+      });
+      if (result.success) {
+        setSuccessMessage('Message envoyé au client !');
+        setShowSuccessModal(true);
+        setShowContactModal(false);
+        setContactReservation(null);
+        setContactMessage('');
+      } else {
+        setConfirmConfig({ title: 'Erreur', message: result.error || 'Erreur lors de l\'envoi du message.', onConfirm: () => setShowConfirmModal(false), variant: 'danger', infoOnly: true });
+        setShowConfirmModal(true);
+      }
+    } catch (e: any) {
+      console.error('Erreur envoi message client:', e);
+      setConfirmConfig({ title: 'Erreur', message: e?.message || 'Erreur inconnue', onConfirm: () => setShowConfirmModal(false), variant: 'danger', infoOnly: true });
+      setShowConfirmModal(true);
+    } finally {
+      setSendingContact(false);
+    }
+  };
 
   const handleEdit = (reservation: Reservation) => {
     setEditingReservation(reservation);
@@ -434,13 +588,46 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
         </div>
       </div>
 
+      {/* Filtre par statut */}
+      {reservations.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {[
+            { value: 'all', label: 'Toutes' },
+            { value: 'pending', label: 'En attente' },
+            { value: 'confirmed', label: 'Confirmées' },
+            { value: 'cancelled', label: 'Annulées' },
+            { value: 'completed', label: 'Terminées' },
+          ].map((opt) => (
+            <button
+              key={opt.value}
+              onClick={() => setStatusFilter(opt.value)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                statusFilter === opt.value
+                  ? 'bg-teal-600 text-white'
+                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Reservations List */}
       <div className="bg-white rounded-xl md:rounded-2xl shadow-sm overflow-hidden">
-        {reservations.length === 0 ? (
+        {(() => {
+          const filtered = statusFilter === 'all'
+            ? reservations
+            : reservations.filter((r) => r.status === statusFilter);
+          return filtered.length === 0 ? (
           <div className="p-12 text-center">
             <i className="ri-calendar-check-line text-5xl text-gray-300 mb-4"></i>
-            <p className="text-gray-600 mb-2">Aucune réservation enregistrée</p>
-            <p className="text-sm text-gray-500">Ajoutez votre première réservation pour commencer</p>
+            <p className="text-gray-600 mb-2">
+              {reservations.length === 0 ? 'Aucune réservation enregistrée' : 'Aucune réservation pour ce filtre'}
+            </p>
+            <p className="text-sm text-gray-500">
+              {reservations.length === 0 ? 'Ajoutez votre première réservation pour commencer' : 'Changez le filtre pour voir d\'autres réservations'}
+            </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -457,7 +644,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {reservations.map((reservation) => (
+                {filtered.map((reservation) => (
                   <tr key={reservation.id} className="hover:bg-gray-50">
                     <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-900 break-words">{reservation.property_title}</td>
                     <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-900">
@@ -475,6 +662,13 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
                           {getStatusLabel(reservation.status)}
                         </span>
+                        {reservation.status === 'confirmed' &&
+                          (Number(reservation.amount_paid ?? 0) > 0) &&
+                          (Number(reservation.amount_paid ?? 0) < Number(reservation.total_amount ?? 0)) && (
+                          <div className="mt-1 text-xs text-amber-700">
+                            Surplus: {(reservation.total_amount - (reservation.amount_paid ?? 0)).toLocaleString('fr-FR')} FCFA
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-xs sm:text-sm text-gray-600 hidden sm:table-cell">
@@ -486,9 +680,18 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                       {reservation.total_amount.toLocaleString('fr-FR')} FCFA
                     </td>
                     <td className="px-3 sm:px-4 py-3 hidden lg:table-cell">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
-                        {getStatusLabel(reservation.status)}
-                      </span>
+                      <div>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(reservation.status)}`}>
+                          {getStatusLabel(reservation.status)}
+                        </span>
+                        {reservation.status === 'confirmed' &&
+                          (Number(reservation.amount_paid ?? 0) > 0) &&
+                          (Number(reservation.amount_paid ?? 0) < Number(reservation.total_amount ?? 0)) && (
+                          <div className="mt-1 text-xs text-amber-700">
+                            Surplus à payer: {(reservation.total_amount - (reservation.amount_paid ?? 0)).toLocaleString('fr-FR')} FCFA
+                          </div>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -529,7 +732,8 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                               });
                             } catch (error: any) {
                               console.error('Erreur lors de la génération du PDF:', error);
-                              alert(`Erreur lors de la génération du PDF: ${error.message}`);
+                              setConfirmConfig({ title: 'Erreur', message: `Erreur lors de la génération du PDF: ${error.message}`, onConfirm: () => setShowConfirmModal(false), variant: 'danger', infoOnly: true });
+                              setShowConfirmModal(true);
                             }
                           }}
                           className="p-2 hover:bg-green-50 rounded-lg transition-colors cursor-pointer"
@@ -538,21 +742,19 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                           <i className="ri-file-download-line text-green-600"></i>
                         </button>
                         <button
+                          onClick={() => handleContactClient(reservation)}
+                          className="p-2 hover:bg-teal-50 rounded-lg transition-colors cursor-pointer"
+                          title="Contacter le client"
+                        >
+                          <i className="ri-mail-send-line text-teal-600"></i>
+                        </button>
+                        <button
                           onClick={() => handleEdit(reservation)}
                           className="p-2 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                           title="Modifier"
                         >
                           <i className="ri-edit-line text-blue-600"></i>
                         </button>
-                        {(reservation.status === 'pending' || reservation.status === 'confirmed') && (
-                          <button
-                            onClick={() => handleCancel(reservation)}
-                            className="p-2 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                            title="Annuler la réservation"
-                          >
-                            <i className="ri-close-circle-line text-amber-600"></i>
-                          </button>
-                        )}
                       </div>
                     </td>
                   </tr>
@@ -560,7 +762,8 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
               </tbody>
             </table>
           </div>
-        )}
+        );
+        })()}
       </div>
 
       {/* Modal */}
@@ -583,6 +786,27 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
             </div>
 
             <div className="space-y-4">
+              {editingReservation?.source === 'platform' ? (
+                <>
+                  <p className="text-sm text-gray-600">
+                    Réservation effectuée sur la plateforme. Vous ne pouvez modifier que le statut.
+                  </p>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Statut</label>
+                    <select
+                      value={form.status}
+                      onChange={(e) => setForm({ ...form, status: e.target.value })}
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
+                    >
+                      <option value="pending">En attente</option>
+                      <option value="confirmed">Confirmée</option>
+                      <option value="cancelled">Annulée</option>
+                      <option value="completed">Terminée</option>
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Bien *</label>
                 <select
@@ -688,8 +912,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                       placeholder={String(calculatedAmount)}
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Saisissez le montant final (FCFA). Laissez vide pour utiliser le montant calculé.</p>
-                  </div>
+                   </div>
                 </div>
               )}
 
@@ -707,6 +930,56 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                 </select>
               </div>
 
+              {/* Marquer surplus payé - uniquement pour réservation owner confirmée modifiée avec surplus */}
+              {editingReservation &&
+                editingReservation.status === 'confirmed' &&
+                (Number(editingReservation.amount_paid ?? 0) > 0) &&
+                (Number(editingReservation.amount_paid ?? 0) < Number(form.total_amount || editingReservation.total_amount)) && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <p className="text-sm text-amber-800 mb-2">
+                    Surplus à payer: <strong>{((Number(form.total_amount || editingReservation.total_amount)) - (Number(editingReservation.amount_paid ?? 0))).toLocaleString('fr-FR')} FCFA</strong>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!editingReservation) return;
+                      const total = Number(form.total_amount || editingReservation.total_amount);
+                      const surplus = (total - (Number(editingReservation.amount_paid ?? 0))).toLocaleString('fr-FR');
+                      setConfirmConfig({
+                        title: 'Marquer le surplus comme payé',
+                        message: `Marquer le surplus de ${surplus} FCFA comme payé par le client ?`,
+                        onConfirm: async () => {
+                          setShowConfirmModal(false);
+                          try {
+                            const { error } = await supabase
+                              .from('reservations')
+                              .update({ amount_paid: total, updated_at: new Date().toISOString() })
+                              .eq('id', editingReservation.id);
+                            if (error) throw error;
+                            setSuccessMessage('Surplus marqué comme payé.');
+                            setShowSuccessModal(true);
+                            setShowModal(false);
+                            setEditingReservation(null);
+                            await loadReservations();
+                          } catch (e: any) {
+                            setConfirmConfig({ title: 'Erreur', message: e?.message || 'Erreur inconnue', onConfirm: () => setShowConfirmModal(false), variant: 'danger', infoOnly: true });
+                            setShowConfirmModal(true);
+                          }
+                        },
+                      });
+                      setShowConfirmModal(true);
+                    }}
+                    className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 transition-colors"
+                  >
+                    <i className="ri-money-dollar-circle-line mr-1"></i>
+                    Marquer le surplus comme payé
+                  </button>
+                </div>
+              )}
+
+                </>
+              )}
+
               <div className="flex gap-4 pt-4">
                 <button
                   onClick={() => {
@@ -718,7 +991,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                   Annuler
                 </button>
                 <button
-                  onClick={handleSubmit}
+                  onClick={handleSubmitClick}
                   disabled={actionLoading}
                   className="flex-1 px-6 py-3 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
@@ -735,6 +1008,77 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal Contacter le client */}
+      {showContactModal && contactReservation && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-900">Contacter le client</h3>
+              <button
+                onClick={() => { setShowContactModal(false); setContactReservation(null); setContactMessage(''); }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+              >
+                <i className="ri-close-line text-xl"></i>
+              </button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              Envoyer un message à <strong>{contactReservation.guest_name}</strong> ({contactReservation.guest_email}) concernant la réservation pour <strong>{contactReservation.property_title}</strong>.
+            </p>
+            <textarea
+              value={contactMessage}
+              onChange={(e) => setContactMessage(e.target.value)}
+              rows={4}
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none mb-4"
+              placeholder="Votre message..."
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowContactModal(false); setContactReservation(null); setContactMessage(''); }}
+                className="flex-1 px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleSendContactMessage}
+                disabled={!contactMessage.trim() || sendingContact}
+                className="flex-1 px-4 py-2 bg-teal-600 text-white rounded-lg font-medium hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {sendingContact ? <i className="ri-loader-4-line animate-spin text-lg"></i> : <i className="ri-mail-send-line"></i>}
+                Envoyer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modales de confirmation et succès */}
+      {showConfirmModal && confirmConfig && (
+        <ConfirmModal
+          isOpen={showConfirmModal}
+          onClose={() => setShowConfirmModal(false)}
+          onConfirm={confirmConfig.onConfirm}
+          title={confirmConfig.title}
+          message={confirmConfig.message}
+          variant={confirmConfig.variant}
+          cancelLabel="Annuler"
+          confirmLabel={confirmConfig.infoOnly ? 'OK' : 'Confirmer'}
+          infoOnly={confirmConfig.infoOnly}
+        />
+      )}
+      {showSuccessModal && (
+        <ConfirmModal
+          isOpen={showSuccessModal}
+          onClose={() => {
+            setShowSuccessModal(false);
+            loadReservations();
+          }}
+          title="Succès"
+          message={successMessage}
+          variant="success"
+          infoOnly
+        />
       )}
     </div>
   );

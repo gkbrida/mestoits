@@ -315,7 +315,7 @@ export default function BienDetailPage() {
             return;
           }
 
-          // 2. Insérer dans reservations (confirmée)
+          // 2. Insérer dans reservations (confirmée, client a payé)
           const { data: newReservation, error: insertError } = await supabase
             .from('reservations')
             .insert([{
@@ -328,7 +328,9 @@ export default function BienDetailPage() {
               end_date: tempData.end_date,
               nights: tempData.nights,
               total_amount: tempData.total_amount,
+              amount_paid: tempData.total_amount,
               status: 'confirmed',
+              source: 'platform',
             }])
             .select('id')
             .single();
