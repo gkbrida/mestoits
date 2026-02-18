@@ -306,23 +306,25 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer cette réservation ?')) return;
+  const handleCancel = async (reservation: Reservation) => {
+    if (reservation.status === 'cancelled') return;
+    if (!confirm(`Êtes-vous sûr de vouloir annuler cette réservation ? L'argent quittera le solde potentiel.`)) return;
 
     try {
       const { error } = await supabase
         .from('reservations')
-        .delete()
-        .eq('id', id);
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() })
+        .eq('id', reservation.id);
 
       if (error) throw error;
-      alert('Réservation supprimée avec succès !');
+      alert('Réservation annulée.');
       await loadReservations();
     } catch (error: any) {
       console.error('Erreur:', error);
       alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
     }
   };
+
 
   const handleEdit = (reservation: Reservation) => {
     setEditingReservation(reservation);
@@ -542,13 +544,15 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                         >
                           <i className="ri-edit-line text-blue-600"></i>
                         </button>
-                        <button
-                          onClick={() => handleDelete(reservation.id)}
-                          className="p-2 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                          title="Supprimer"
-                        >
-                          <i className="ri-delete-bin-line text-red-600"></i>
-                        </button>
+                        {(reservation.status === 'pending' || reservation.status === 'confirmed') && (
+                          <button
+                            onClick={() => handleCancel(reservation)}
+                            className="p-2 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
+                            title="Annuler la réservation"
+                          >
+                            <i className="ri-close-circle-line text-amber-600"></i>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>

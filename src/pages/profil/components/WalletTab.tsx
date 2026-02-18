@@ -18,6 +18,8 @@ export interface WalletEntry {
   fraisTransaction: number;
   amountNet: number;
   isWithdrawal?: boolean;
+  /** true = solde disponible (encaissable), false = solde potentiel (réservation en cours) */
+  isAvailable?: boolean;
 }
 
 export default function WalletTab() {
@@ -62,40 +64,51 @@ export default function WalletTab() {
         installment_payment: await getCommissionRate('installment_payment'),
       };
 
-      // 1. Réservations confirmées (courte durée)
-      const { data: reservations } = await supabase
-        .from('reservations')
-        .select('id, total_amount, created_at, start_date, end_date')
-        .eq('owner_id', user.id)
-        .eq('status', 'confirmed');
-
+      // 1. Réservations plateforme (identifiées par la présence d'une commission)
+      // Seules les réservations payées sur le site ont une commission
+      // - completed -> solde disponible (encaissable)
+      // - confirmed -> solde potentiel (non encaissable tant que non terminée)
       const { data: reservationCommissions } = await supabase
         .from('commissions')
         .select('transaction_id, commission_amount, commission_rate')
         .eq('transaction_type', 'reservation');
 
+      const platformReservationIds = new Set(
+        (reservationCommissions || []).map((c: any) => c.transaction_id)
+      );
       const commResMap = new Map(
         (reservationCommissions || []).map((c: any) => [c.transaction_id, c])
       );
 
-      (reservations || []).forEach((r: any) => {
-        const amountBrut = Number(r.total_amount || 0);
-        const comm = commResMap.get(r.id);
-        const commissionRate = comm ? Number(comm.commission_rate) : commissionRates.reservation;
-        const commissionAmount = comm ? Number(comm.commission_amount) : calculateCommission(amountBrut, commissionRate);
-        const fraisTransaction = (amountBrut * FRAIS_TRANSACTION_POURCENT) / 100;
-        allEntries.push({
-          id: r.id,
-          type: 'reservation',
-          label: `Réservation courte durée`,
-          date: r.created_at || r.start_date,
-          amountBrut,
-          commissionRate,
-          commissionAmount,
-          fraisTransaction,
-          amountNet: amountBrut - commissionAmount - fraisTransaction,
+      if (platformReservationIds.size > 0) {
+        const { data: reservations } = await supabase
+          .from('reservations')
+          .select('id, total_amount, created_at, start_date, end_date, status')
+          .eq('owner_id', user.id)
+          .in('id', Array.from(platformReservationIds))
+          .in('status', ['confirmed', 'completed']);
+
+        (reservations || []).forEach((r: any) => {
+          const amountBrut = Number(r.total_amount || 0);
+          const comm = commResMap.get(r.id);
+          const commissionRate = comm ? Number(comm.commission_rate) : commissionRates.reservation;
+          const commissionAmount = comm ? Number(comm.commission_amount) : calculateCommission(amountBrut, commissionRate);
+          const fraisTransaction = (amountBrut * FRAIS_TRANSACTION_POURCENT) / 100;
+          const amountNet = amountBrut - commissionAmount - fraisTransaction;
+          allEntries.push({
+            id: r.id,
+            type: 'reservation',
+            label: r.status === 'completed' ? 'Réservation courte durée (terminée)' : 'Réservation courte durée (en cours)',
+            date: r.created_at || r.start_date,
+            amountBrut,
+            commissionRate,
+            commissionAmount,
+            fraisTransaction,
+            amountNet,
+            isAvailable: r.status === 'completed', // true = solde disponible, false = solde potentiel
+          });
         });
-      });
+      }
 
       // 2. Loyers (payments via leases)
       const { data: leases } = await supabase
@@ -324,7 +337,10 @@ export default function WalletTab() {
   const formatPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n)) + ' FCFA';
   const formatDate = (d: string) => new Date(d).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' });
 
-  const totalNet = entries.reduce((s, e) => s + e.amountNet, 0);
+  // Solde disponible : réservations terminées + loyers + échéances + affiliation - retraits (encaissable)
+  const totalNet = entries.reduce((s, e) => s + (e.isAvailable !== false ? e.amountNet : 0), 0);
+  // Solde potentiel : réservations confirmées en cours (non encaissable tant que non terminées)
+  const totalPotential = entries.reduce((s, e) => s + (e.isAvailable === false ? e.amountNet : 0), 0);
 
   if (loading) {
     return (
@@ -353,10 +369,23 @@ export default function WalletTab() {
         </div>
       </div>
 
-      {/* Solde total + Encaisser */}
-      <div className="bg-gradient-to-r from-teal-500 to-teal-600 rounded-xl p-6 text-white">
-        <p className="text-sm font-medium text-teal-100">Solde disponible</p>
-        <p className="text-3xl font-bold mt-1">{formatPrice(totalNet)}</p>
+      {/* Soldes */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-gradient-to-r from-teal-500 to-teal-600 rounded-xl p-6 text-white">
+          <p className="text-sm font-medium text-teal-100">Solde disponible</p>
+          <p className="text-2xl sm:text-3xl font-bold mt-1">{formatPrice(totalNet)}</p>
+          <p className="text-xs text-teal-200 mt-1">Réservations terminées, loyers, échéances, affiliation. Encaissable.</p>
+        </div>
+        <div className="bg-gradient-to-r from-amber-500 to-amber-600 rounded-xl p-6 text-white">
+          <p className="text-sm font-medium text-amber-100">Solde potentiel</p>
+          <p className="text-2xl sm:text-3xl font-bold mt-1">{formatPrice(totalPotential)}</p>
+          <p className="text-xs text-amber-200 mt-1">Réservations en cours. Encaissable une fois le séjour terminé.</p>
+        </div>
+      </div>
+
+      {/* Encaisser */}
+      <div className="bg-gray-50 rounded-xl p-5 border border-gray-200">
+        <p className="text-sm text-gray-600 mb-2">Vous ne pouvez encaisser que le solde disponible.</p>
         <button
           onClick={async () => {
             if (!payoutAccount) {
@@ -383,7 +412,7 @@ export default function WalletTab() {
             }
           }}
           disabled={totalNet <= 0}
-          className="mt-4 px-6 py-2.5 bg-white text-teal-700 rounded-lg font-semibold hover:bg-teal-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="mt-2 px-6 py-2.5 bg-teal-600 text-white rounded-lg font-semibold hover:bg-teal-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <i className="ri-money-dollar-circle-line mr-2"></i>
           Encaisser

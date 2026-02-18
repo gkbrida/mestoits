@@ -240,7 +240,6 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
       });
     
     setRentPayments(payments);
-      
       // Calculer les statistiques directement depuis les données de la DB
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -765,6 +764,160 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
     } catch (error: any) {
       console.error('Erreur:', error);
       alert(`Une erreur est survenue: ${error.message || 'Erreur inconnue'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Marquer une échéance individuelle comme payée (paiement manuel par le propriétaire)
+  const handleMarkInstallmentAsPaid = async (installmentId: string, planId: string, paymentId: string, instNum: number, instAmount: number) => {
+    if (lease.status === 'terminated') {
+      alert('Impossible de modifier un paiement pour un bail clôturé.');
+      return;
+    }
+    if (!confirm(`Confirmer le paiement de l'échéance ${instNum} pour un montant de ${formatPrice(instAmount)} ?`)) return;
+
+    setActionLoading(true);
+    try {
+      const paymentDate = new Date().toISOString().split('T')[0];
+      const { error: updateError } = await supabase
+        .from('payment_installment_payments')
+        .update({
+          status: 'paid',
+          payment_date: paymentDate,
+          payment_method: 'manual',
+        })
+        .eq('id', installmentId);
+
+      if (updateError) throw updateError;
+
+      // Vérifier si toutes les échéances sont payées -> marquer le paiement principal
+      const { data: remaining } = await supabase
+        .from('payment_installment_payments')
+        .select('id')
+        .eq('plan_id', planId)
+        .neq('status', 'paid');
+
+      if (!remaining || remaining.length === 0) {
+        await supabase
+          .from('payments')
+          .update({
+            status: 'paid',
+            payment_date: paymentDate,
+            payment_method: 'manual',
+          })
+          .eq('id', paymentId);
+      }
+
+      await loadRentPayments();
+
+      // Rafraîchir le détail du modal avec les données à jour
+      const { data: plansData } = await supabase
+        .from('payment_installment_plans')
+        .select('*')
+        .eq('payment_id', paymentId)
+        .maybeSingle();
+      if (plansData && selectedPaymentForDetail) {
+        const { data: instData } = await supabase
+          .from('payment_installment_payments')
+          .select('*')
+          .eq('plan_id', plansData.id)
+          .order('installment_number');
+        const installments = (instData || []).map((ip: any) => ({
+          id: ip.id,
+          installment_number: ip.installment_number,
+          due_date: ip.due_date,
+          amount: parseFloat(ip.amount),
+          status: ip.status,
+          payment_date: ip.payment_date,
+        }));
+        const remainingAmount = installments
+          .filter((ip: any) => ip.status !== 'paid')
+          .reduce((s: number, ip: any) => s + ip.amount, 0);
+        setSelectedPaymentForDetail({
+          ...selectedPaymentForDetail,
+          installmentPlan: {
+            ...selectedPaymentForDetail.installmentPlan!,
+            installments,
+            remainingAmount,
+          },
+        });
+      }
+    } catch (error: any) {
+      console.error('Erreur:', error);
+      alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // Annuler le marquage d'une échéance (remettre en attente en cas d'erreur)
+  const handleMarkInstallmentAsUnpaid = async (installmentId: string, planId: string, paymentId: string, instNum: number) => {
+    if (lease.status === 'terminated') {
+      alert('Impossible de modifier un paiement pour un bail clôturé.');
+      return;
+    }
+    if (!confirm(`Annuler le marquage de l'échéance ${instNum} et la remettre en attente ?`)) return;
+
+    setActionLoading(true);
+    try {
+      const { error: updateError } = await supabase
+        .from('payment_installment_payments')
+        .update({
+          status: 'pending',
+          payment_date: null,
+          payment_method: null,
+        })
+        .eq('id', installmentId);
+
+      if (updateError) throw updateError;
+
+      // Remettre le paiement principal en impayé (au moins une échéance est à nouveau en attente)
+      await supabase
+        .from('payments')
+        .update({
+          status: 'pending',
+          payment_date: null,
+          payment_method: null,
+        })
+        .eq('id', paymentId);
+
+      await loadRentPayments();
+
+      const { data: plansData } = await supabase
+        .from('payment_installment_plans')
+        .select('*')
+        .eq('payment_id', paymentId)
+        .maybeSingle();
+      if (plansData && selectedPaymentForDetail) {
+        const { data: instData } = await supabase
+          .from('payment_installment_payments')
+          .select('*')
+          .eq('plan_id', plansData.id)
+          .order('installment_number');
+        const installments = (instData || []).map((ip: any) => ({
+          id: ip.id,
+          installment_number: ip.installment_number,
+          due_date: ip.due_date,
+          amount: parseFloat(ip.amount),
+          status: ip.status,
+          payment_date: ip.payment_date,
+        }));
+        const remainingAmount = installments
+          .filter((ip: any) => ip.status !== 'paid')
+          .reduce((s: number, ip: any) => s + ip.amount, 0);
+        setSelectedPaymentForDetail({
+          ...selectedPaymentForDetail,
+          installmentPlan: {
+            ...selectedPaymentForDetail.installmentPlan!,
+            installments,
+            remainingAmount,
+          },
+        });
+      }
+    } catch (error: any) {
+      console.error('Erreur:', error);
+      alert(`Erreur: ${error.message || 'Erreur inconnue'}`);
     } finally {
       setActionLoading(false);
     }
@@ -2351,18 +2504,36 @@ export default function LeaseDetailView({ lease, onBack }: LeaseDetailViewProps)
             </div>
             <div className="space-y-2">
               {selectedPaymentForDetail.installmentPlan.installments.map((inst) => (
-                <div key={inst.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200">
+                <div key={inst.id} className="flex items-center justify-between gap-2 p-3 rounded-lg border border-gray-200">
                   <div>
                     <span className="font-medium">Échéance {inst.installment_number}</span>
                     <span className="text-sm text-gray-600 ml-2">- {formatDate(inst.due_date)}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <span className="font-semibold">{formatPrice(inst.amount)}</span>
                     <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                       inst.status === 'paid' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
                     }`}>
                       {inst.status === 'paid' ? 'Payé' : 'En attente'}
                     </span>
+                    {inst.status !== 'paid' ? (
+                      <button
+                        onClick={() => handleMarkInstallmentAsPaid(inst.id, selectedPaymentForDetail.installmentPlan!.id, selectedPaymentForDetail.id, inst.installment_number, inst.amount)}
+                        disabled={actionLoading || lease.status === 'terminated'}
+                        className="px-3 py-1.5 bg-teal-600 text-white rounded-lg text-xs font-medium hover:bg-teal-700 disabled:opacity-50"
+                      >
+                        Marquer payé
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleMarkInstallmentAsUnpaid(inst.id, selectedPaymentForDetail.installmentPlan!.id, selectedPaymentForDetail.id, inst.installment_number)}
+                        disabled={actionLoading || lease.status === 'terminated'}
+                        className="px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-300 disabled:opacity-50"
+                        title="Annuler en cas d'erreur"
+                      >
+                        Annuler
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

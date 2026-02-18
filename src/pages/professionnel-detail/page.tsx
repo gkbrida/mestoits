@@ -49,6 +49,24 @@ export default function ProfessionalDetailPage() {
   const [availableProperties, setAvailableProperties] = useState<any[]>([]);
   const [soldProperties, setSoldProperties] = useState<any[]>([]);
   const [loadingProperties, setLoadingProperties] = useState(true);
+  const [showPhotoGallery, setShowPhotoGallery] = useState(false);
+  const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
+  const [currentPhotoList, setCurrentPhotoList] = useState<string[]>([]);
+
+  const openPhotoGallery = (photos: string[], startIndex: number = 0) => {
+    if (photos.length === 0) return;
+    setCurrentPhotoList(photos);
+    setCurrentPhotoIndex(startIndex);
+    setShowPhotoGallery(true);
+  };
+
+  const goToPreviousPhoto = () => {
+    setCurrentPhotoIndex((prev) => (prev > 0 ? prev - 1 : currentPhotoList.length - 1));
+  };
+
+  const goToNextPhoto = () => {
+    setCurrentPhotoIndex((prev) => (prev < currentPhotoList.length - 1 ? prev + 1 : 0));
+  };
 
   useEffect(() => {
     if (id) {
@@ -56,6 +74,24 @@ export default function ProfessionalDetailPage() {
       fetchProperties();
     }
   }, [id]);
+
+  useEffect(() => {
+    if (!showPhotoGallery) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        goToPreviousPhoto();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        goToNextPhoto();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowPhotoGallery(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showPhotoGallery, currentPhotoList.length]);
 
   const fetchProfessional = async () => {
     try {
@@ -148,10 +184,10 @@ export default function ProfessionalDetailPage() {
         return;
       }
 
-      // Charger les biens disponibles (status = 'active')
+      // Charger les biens disponibles (status = 'active') depuis properties_02
       const { data: availableData, error: availableError } = await supabase
-        .from('properties')
-        .select('id, title, price, city, images, offer_type, property_type, surface_area, bedrooms, status, created_at')
+        .from('properties_02')
+        .select('id, title, price, city, images, operation_type, property_type, surface_area, bedrooms, status, created_at')
         .eq('owner_id', id)
         .eq('status', 'active')
         .order('created_at', { ascending: false })
@@ -165,10 +201,10 @@ export default function ProfessionalDetailPage() {
         setAvailableProperties(availableData || []);
       }
 
-      // Charger les biens vendus (status = 'sold')
+      // Charger les biens vendus (status = 'sold') depuis properties_02
       const { data: soldData, error: soldError } = await supabase
-        .from('properties')
-        .select('id, title, price, city, images, offer_type, property_type, surface_area, bedrooms, status, created_at')
+        .from('properties_02')
+        .select('id, title, price, city, images, operation_type, property_type, surface_area, bedrooms, status, created_at')
         .eq('owner_id', id)
         .eq('status', 'sold')
         .order('created_at', { ascending: false })
@@ -390,12 +426,19 @@ export default function ProfessionalDetailPage() {
                   </h2>
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3 md:gap-4">
                     {professional.activity_photos.map((photo, index) => (
-                      <div key={index} className="relative aspect-square rounded-lg md:rounded-xl overflow-hidden">
+                      <div
+                        key={index}
+                        onClick={() => openPhotoGallery(professional.activity_photos!, index)}
+                        className="relative aspect-square rounded-lg md:rounded-xl overflow-hidden cursor-pointer group"
+                      >
                         <img
                           src={photo}
                           alt={`Photo d'activité ${index + 1}`}
-                          className="w-full h-full object-cover hover:scale-105 transition-transform cursor-pointer"
+                          className="w-full h-full object-cover hover:scale-105 transition-transform"
                         />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
+                          <i className="ri-fullscreen-line text-white text-2xl opacity-0 group-hover:opacity-100 transition-opacity"></i>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -473,7 +516,7 @@ export default function ProfessionalDetailPage() {
                             />
                             <div className="absolute top-2 sm:top-3 left-2 sm:left-3">
                               <span className="px-2 sm:px-3 py-0.5 sm:py-1 bg-white/90 backdrop-blur-sm text-teal-600 text-[10px] sm:text-xs font-semibold rounded-full">
-                                {property.offer_type === 'sale' ? 'Vente' : 'Location'}
+                                {(property.operation_type || property.offer_type) === 'sale' ? 'Vente' : 'Location'}
                               </span>
                             </div>
                           </div>
@@ -749,6 +792,74 @@ export default function ProfessionalDetailPage() {
       </main>
 
       <Footer />
+
+      {/* Full-screen Photo Gallery */}
+      {showPhotoGallery && currentPhotoList.length > 0 && (
+        <div className="fixed inset-0 bg-black/95 flex items-center justify-center z-50">
+          <div className="relative w-full h-full flex items-center justify-center">
+            <button
+              onClick={() => setShowPhotoGallery(false)}
+              className="absolute top-4 right-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+            >
+              <i className="ri-close-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+            </button>
+
+            {currentPhotoList.length > 1 && (
+              <button
+                onClick={goToPreviousPhoto}
+                className="absolute left-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+              >
+                <i className="ri-arrow-left-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+              </button>
+            )}
+
+            <div className="max-w-7xl max-h-[90vh] w-full h-full flex items-center justify-center p-4">
+              <img
+                src={currentPhotoList[currentPhotoIndex]}
+                alt={`Photo d'activité ${currentPhotoIndex + 1} sur ${currentPhotoList.length}`}
+                className="max-w-full max-h-full object-contain rounded-lg"
+              />
+            </div>
+
+            {currentPhotoList.length > 1 && (
+              <button
+                onClick={goToNextPhoto}
+                className="absolute right-4 z-10 w-12 h-12 bg-white/10 hover:bg-white/20 text-white rounded-full flex items-center justify-center transition-colors cursor-pointer backdrop-blur-sm"
+              >
+                <i className="ri-arrow-right-line text-2xl w-6 h-6 flex items-center justify-center"></i>
+              </button>
+            )}
+
+            {currentPhotoList.length > 1 && (
+              <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/50 text-white px-4 py-2 rounded-full text-sm backdrop-blur-sm">
+                {currentPhotoIndex + 1} / {currentPhotoList.length}
+              </div>
+            )}
+
+            {currentPhotoList.length > 1 && (
+              <div className="absolute bottom-16 left-1/2 transform -translate-x-1/2 flex gap-2 max-w-4xl overflow-x-auto px-4 py-2 bg-black/30 backdrop-blur-sm rounded-lg">
+                {currentPhotoList.map((photoUrl, index) => (
+                  <button
+                    key={index}
+                    onClick={() => setCurrentPhotoIndex(index)}
+                    className={`flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all ${
+                      index === currentPhotoIndex
+                        ? 'border-teal-500 scale-110'
+                        : 'border-white/30 hover:border-white/60'
+                    }`}
+                  >
+                    <img
+                      src={photoUrl}
+                      alt={`Miniature ${index + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Contact Form Modal */}
       {showContactForm && (
