@@ -288,7 +288,7 @@ export default function BienDetailPage() {
   const [ownerPhone, setOwnerPhone] = useState('');
   const [cityName, setCityName] = useState<string>('');
   const [showStickyButton, setShowStickyButton] = useState(true);
-  const userInteractedWithReservationRef = useRef(false);
+  const stickyPermanentlyHiddenRef = useRef(false); // true une fois clic sticky/calendrier/Réserver
   const reservationFormRef = useRef<HTMLDivElement>(null);
   const reservationValidationZoneRef = useRef<HTMLDivElement | null>(null);
   const contactFormRef = useRef<HTMLDivElement>(null);
@@ -550,36 +550,10 @@ L'équipe Mestoits`;
     }
   };
 
-  // Observer : masquer le sticky quand le formulaire est dans le viewport
-  // Pour location courte durée : ne jamais réafficher une fois que l'utilisateur a interagi (sticky, calendrier, Réserver)
-  useEffect(() => {
-    if (!property) return;
-
-    const isShortTermRental = (property as any).operation_type === 'short-term-rental';
-    const node = isShortTermRental ? reservationFormRef.current : contactFormRef.current;
-    if (!node) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setShowStickyButton(false);
-          } else if (!isShortTermRental || !userInteractedWithReservationRef.current) {
-            setShowStickyButton(true);
-          }
-        });
-      },
-      { threshold: 0, rootMargin: '0px 0px 80px 0px' }
-    );
-
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, [property]);
-
   const scrollToForm = () => {
     if (!property) return;
     if ((property as any).operation_type === 'short-term-rental') {
-      userInteractedWithReservationRef.current = true;
+      stickyPermanentlyHiddenRef.current = true;
       setShowStickyButton(false);
     }
     const isShortTermRental = (property as any).operation_type === 'short-term-rental';
@@ -789,7 +763,10 @@ L'équipe Mestoits`;
                 virtualTourUrl={property.virtual_tour_url}
                 propertyType={property.property_type}
                 propertyId={property.id}
-                onGalleryOpenChange={(isOpen) => setShowStickyButton(!isOpen)}
+                onGalleryOpenChange={(isOpen) => {
+                  if (isOpen) setShowStickyButton(false);
+                  else if (!stickyPermanentlyHiddenRef.current) setShowStickyButton(true);
+                }}
               />
 
               {/* Price and Location */}
@@ -1018,7 +995,7 @@ L'équipe Mestoits`;
                       validationZoneRef={reservationValidationZoneRef}
                       onValidationZoneVisible={(visible) => {
                         if (visible) {
-                          userInteractedWithReservationRef.current = true;
+                          stickyPermanentlyHiddenRef.current = true;
                           setShowStickyButton(false);
                         }
                       }}
