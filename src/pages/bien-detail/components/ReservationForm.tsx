@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import { useEmail } from '../../../hooks/useEmail';
@@ -9,9 +9,13 @@ interface ReservationFormProps {
   price: number;
   propertyTitle?: string;
   ownerId?: string;
+  /** Ref sur un élément en bas du formulaire (bouton de validation) - pour masquer le bouton sticky mobile quand visible */
+  validationZoneRef?: React.RefObject<HTMLDivElement | null>;
+  /** Callback quand la zone de validation devient visible/invisible (pour masquer le sticky mobile) */
+  onValidationZoneVisible?: (visible: boolean) => void;
 }
 
-export default function ReservationForm({ propertyId, price, propertyTitle, ownerId }: ReservationFormProps) {
+export default function ReservationForm({ propertyId, price, propertyTitle, ownerId, validationZoneRef, onValidationZoneVisible }: ReservationFormProps) {
   const navigate = useNavigate();
   const { sendEmail } = useEmail();
   const [startDate, setStartDate] = useState('');
@@ -27,6 +31,7 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'stripe' | 'paydunya'>('stripe');
   const [processingPayment, setProcessingPayment] = useState(false);
   const [, setExpiryCheckTick] = useState(0);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     checkAuth();
@@ -172,6 +177,7 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
   };
 
   const handleReserve = async () => {
+    onValidationZoneVisible?.(true); // Masquer le bouton sticky au clic
     if (!isAuthenticated) {
       // Rediriger vers la page de connexion avec un retour vers cette page
       navigate(`/connexion?redirect=/bien/${propertyId}`);
@@ -447,8 +453,14 @@ L'équipe Mestoits`;
     );
   }
 
+  const hideSticky = () => onValidationZoneVisible?.(true);
+
   return (
-    <div className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 sm:p-6 max-h-[calc(100vh-8rem)] overflow-y-auto lg:overflow-y-auto">
+    <div
+      ref={scrollContainerRef}
+      className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 sm:p-6 max-h-[calc(100vh-8rem)] overflow-y-auto lg:overflow-y-auto"
+      onPointerDown={hideSticky}
+    >
       <h3 className="text-lg sm:text-xl font-bold text-gray-900 mb-4 sm:mb-6">
         Réserver ce bien
       </h3>
@@ -471,6 +483,7 @@ L'équipe Mestoits`;
             }}
             onEndDateChange={setEndDate}
             unavailableDates={unavailableDates}
+            onInteraction={() => onValidationZoneVisible?.(true)}
           />
         </div>
 
@@ -507,6 +520,8 @@ L'équipe Mestoits`;
           </div>
         )}
 
+        {/* Zone du bouton de validation - ref pour masquer le sticky mobile quand visible */}
+        <div ref={validationZoneRef} className="min-h-[1px]">
         {/* Bouton de réservation */}
         <button
           onClick={handleReserve}
@@ -528,12 +543,10 @@ L'équipe Mestoits`;
               Se connecter pour réserver
             </span>
           ) : (
-            <span className="flex items-center justify-center gap-2">
-              <i className="ri-calendar-check-line"></i>
-              Réserver maintenant
-            </span>
+            'Réserver'
           )}
         </button>
+        </div>
 
         {!isAuthenticated && (
           <p className="text-xs text-gray-500 text-center">

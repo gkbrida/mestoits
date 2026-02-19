@@ -47,9 +47,10 @@ export default function PropertyDetailsStep({ data, onUpdate, onValidationChange
       return !!(data.building_floors && data.building_floors > 0 && data.total_units && data.total_units > 0 && data.description && data.description.trim().length > 0);
     }
 
-    // Pour Terrain : description et nombre de lots obligatoires
+    // Pour Terrain : description et nombre de lots obligatoires (valeur par défaut 1)
     if (data.property_type === 'land') {
-      return !!(data.description && data.description.trim().length > 0 && data.available_lots && data.available_lots > 0);
+      const lots = data.available_lots ?? 1;
+      return !!(data.description && data.description.trim().length > 0 && lots > 0);
     }
 
     return true;

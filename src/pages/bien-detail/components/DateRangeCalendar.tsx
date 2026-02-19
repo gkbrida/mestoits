@@ -6,6 +6,8 @@ interface DateRangeCalendarProps {
   onStartDateChange: (date: string) => void;
   onEndDateChange: (date: string) => void;
   unavailableDates?: string[]; // Liste des dates indisponibles au format YYYY-MM-DD
+  /** Appelé à toute interaction (tap, click, navigation mois) pour masquer le bouton sticky mobile */
+  onInteraction?: () => void;
 }
 
 export default function DateRangeCalendar({ 
@@ -13,7 +15,8 @@ export default function DateRangeCalendar({
   endDate, 
   onStartDateChange, 
   onEndDateChange,
-  unavailableDates = []
+  unavailableDates = [],
+  onInteraction
 }: DateRangeCalendarProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
@@ -55,6 +58,7 @@ export default function DateRangeCalendar({
   };
 
   const handleDateClick = (day: number) => {
+    onInteraction?.();
     const date = new Date(year, month, day);
     const dateStr = date.toISOString().split('T')[0];
 
@@ -79,10 +83,12 @@ export default function DateRangeCalendar({
   };
 
   const goToPreviousMonth = () => {
+    onInteraction?.();
     setCurrentMonth(new Date(year, month - 1, 1));
   };
 
   const goToNextMonth = () => {
+    onInteraction?.();
     setCurrentMonth(new Date(year, month + 1, 1));
   };
 
@@ -106,7 +112,10 @@ export default function DateRangeCalendar({
   }
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
+    <div
+      className="bg-white rounded-lg border border-gray-200 p-4"
+      onPointerDown={onInteraction}
+    >
       {/* En-tête du calendrier */}
       <div className="flex items-center justify-between mb-4">
         <button

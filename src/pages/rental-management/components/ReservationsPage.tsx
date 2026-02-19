@@ -482,6 +482,11 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
 
   const handleEdit = (reservation: Reservation) => {
     setEditingReservation(reservation);
+    const isPlatform = reservation.source === 'platform';
+    // Pour les réservations plateforme, statuts autorisés : annulée ou terminée uniquement
+    const initialStatus = isPlatform && !['cancelled', 'completed'].includes(reservation.status)
+      ? 'completed'
+      : reservation.status;
     setForm({
       property_id: reservation.property_id,
       guest_name: reservation.guest_name,
@@ -490,7 +495,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
       start_date: reservation.start_date,
       end_date: reservation.end_date,
       total_amount: String(reservation.total_amount ?? ''),
-      status: reservation.status
+      status: initialStatus
     });
     setShowModal(true);
   };
@@ -789,7 +794,7 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
               {editingReservation?.source === 'platform' ? (
                 <>
                   <p className="text-sm text-gray-600">
-                    Réservation effectuée sur la plateforme. Vous ne pouvez modifier que le statut.
+                    Réservation effectuée sur la plateforme. Vous ne pouvez modifier le statut qu'en Annulée ou Terminée.
                   </p>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Statut</label>
@@ -798,8 +803,6 @@ export default function ReservationsPage({ userId, onBack }: ReservationsPagePro
                       onChange={(e) => setForm({ ...form, status: e.target.value })}
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-teal-500 focus:outline-none"
                     >
-                      <option value="pending">En attente</option>
-                      <option value="confirmed">Confirmée</option>
                       <option value="cancelled">Annulée</option>
                       <option value="completed">Terminée</option>
                     </select>

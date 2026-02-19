@@ -1,6 +1,5 @@
 import { useEffect } from 'react';
 import { usePropertyTypes } from '../../../hooks/usePropertyTypes';
-// @ts-expect-error - Problème de cache TypeScript, le fichier existe bien
 import { useOperationTypes } from '../../../hooks/useOperationTypes';
 
 // Type local pour éviter les problèmes de cache TypeScript
@@ -50,9 +49,10 @@ export default function BasicInfoStep({ data, onUpdate, onValidationChange }: Ba
       return false;
     }
     
-    // Pour les terrains : superficie/lot et nombre de lots obligatoires
+    // Pour les terrains : superficie/lot et nombre de lots obligatoires (valeur par défaut 1 pour les lots)
     if (data.property_type === 'land') {
-      return !!(data.surface_per_lot && data.surface_per_lot > 0 && data.available_lots && data.available_lots > 0);
+      const lots = data.available_lots ?? 1;
+      return !!(data.surface_per_lot && data.surface_per_lot > 0 && lots > 0);
     }
     
     // Pour les autres types : superficie non obligatoire
@@ -158,9 +158,12 @@ export default function BasicInfoStep({ data, onUpdate, onValidationChange }: Ba
                 type="button"
                 onClick={() => {
                   const updateData: any = { property_type: type.value };
-                  // Réinitialiser villa_type si ce n'est pas une villa
                   if (type.value !== 'villa') {
                     updateData.villa_type = undefined;
+                  }
+                  // Terrain : initialiser available_lots à 1 pour éviter blocage si valeur par défaut non modifiée
+                  if (type.value === 'land') {
+                    updateData.available_lots = data.available_lots ?? 1;
                   }
                   onUpdate(updateData);
                 }}

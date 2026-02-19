@@ -288,7 +288,9 @@ export default function BienDetailPage() {
   const [ownerPhone, setOwnerPhone] = useState('');
   const [cityName, setCityName] = useState<string>('');
   const [showStickyButton, setShowStickyButton] = useState(true);
+  const userInteractedWithReservationRef = useRef(false);
   const reservationFormRef = useRef<HTMLDivElement>(null);
+  const reservationValidationZoneRef = useRef<HTMLDivElement | null>(null);
   const contactFormRef = useRef<HTMLDivElement>(null);
 
   // Gérer le retour après paiement Stripe pour les réservations
@@ -548,42 +550,40 @@ L'équipe Mestoits`;
     }
   };
 
-  // Observer pour détecter quand le formulaire est visible (pour masquer le bouton sticky)
+  // Observer : masquer le sticky quand le formulaire est dans le viewport
+  // Pour location courte durée : ne jamais réafficher une fois que l'utilisateur a interagi (sticky, calendrier, Réserver)
   useEffect(() => {
     if (!property) return;
 
     const isShortTermRental = (property as any).operation_type === 'short-term-rental';
-    const targetRef = isShortTermRental ? reservationFormRef : contactFormRef;
-    
-    if (!targetRef.current) return;
+    const node = isShortTermRental ? reservationFormRef.current : contactFormRef.current;
+    if (!node) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
-          // Si le formulaire est visible (même partiellement), masquer le bouton sticky
-          // entry.isIntersecting = true signifie que le formulaire est visible dans le viewport
-          setShowStickyButton(!entry.isIntersecting);
+          if (entry.isIntersecting) {
+            setShowStickyButton(false);
+          } else if (!isShortTermRental || !userInteractedWithReservationRef.current) {
+            setShowStickyButton(true);
+          }
         });
       },
-      {
-        threshold: 0, // Détecter dès qu'une partie du formulaire entre dans le viewport
-        rootMargin: '0px', // Pas de marge, détecter exactement quand le formulaire entre dans le viewport
-      }
+      { threshold: 0, rootMargin: '0px 0px 80px 0px' }
     );
 
-    observer.observe(targetRef.current);
-
-    return () => {
-      observer.disconnect();
-    };
+    observer.observe(node);
+    return () => observer.disconnect();
   }, [property]);
 
   const scrollToForm = () => {
     if (!property) return;
-
+    if ((property as any).operation_type === 'short-term-rental') {
+      userInteractedWithReservationRef.current = true;
+      setShowStickyButton(false);
+    }
     const isShortTermRental = (property as any).operation_type === 'short-term-rental';
     const targetRef = isShortTermRental ? reservationFormRef : contactFormRef;
-    
     if (targetRef.current) {
       targetRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -763,7 +763,7 @@ L'équipe Mestoits`;
       <Navbar onMenuToggle={() => setIsMenuOpen(true)} />
       <SideMenu isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
-      <div className="pt-16 md:pt-24 pb-20">
+      <div className={`pt-16 md:pt-24 ${showStickyButton ? 'pb-32' : 'pb-20'}`}>
         <div className="max-w-[1400px] mx-auto px-4 md:px-6">
           {/* Breadcrumb */}
           <div className="flex items-center gap-1 md:gap-2 text-xs md:text-sm text-gray-600 mb-4 md:mb-6 overflow-x-auto">
@@ -1010,11 +1010,18 @@ L'équipe Mestoits`;
                 {/* Afficher le formulaire de réservation pour location courte durée, sinon le formulaire de contact */}
                 {(property as any).operation_type === 'short-term-rental' ? (
                   <div ref={reservationFormRef}>
-                    <ReservationForm 
-                      propertyId={property.id} 
+                    <ReservationForm
+                      propertyId={property.id}
                       price={property.price}
                       propertyTitle={property.title}
                       ownerId={property.owner_id}
+                      validationZoneRef={reservationValidationZoneRef}
+                      onValidationZoneVisible={(visible) => {
+                        if (visible) {
+                          userInteractedWithReservationRef.current = true;
+                          setShowStickyButton(false);
+                        }
+                      }}
                     />
                   </div>
                 ) : (
