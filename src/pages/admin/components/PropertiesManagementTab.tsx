@@ -8,9 +8,9 @@ interface Property {
   city: string;
   property_type: string;
   offer_type: string;
+  operation_type?: string;
   price: number;
   status: string;
-  is_approved: boolean;
   owner_id: string;
   created_at: string;
   owner?: {
@@ -35,14 +35,14 @@ export default function PropertiesManagementTab() {
     try {
       setLoading(true);
       let query = supabase
-        .from('properties')
+        .from('properties_02')
         .select('*, owner:users_2025_12_01_11_29!owner_id(full_name, email)')
         .order('created_at', { ascending: false });
 
       if (filter === 'approved') {
-        query = query.eq('is_approved', true);
+        query = query.eq('status', 'active');
       } else if (filter === 'pending') {
-        query = query.eq('is_approved', false);
+        query = query.eq('status', 'draft');
       }
 
       const { data, error } = await query;
@@ -59,9 +59,10 @@ export default function PropertiesManagementTab() {
   const handleToggleApproval = async (propertyId: string, currentStatus: boolean) => {
     try {
       setActionLoading(propertyId);
+      const newStatus = currentStatus ? 'draft' : 'active';
       const { error } = await supabase
-        .from('properties')
-        .update({ is_approved: !currentStatus })
+        .from('properties_02')
+        .update({ status: newStatus })
         .eq('id', propertyId);
 
       if (error) throw error;
@@ -163,7 +164,7 @@ export default function PropertiesManagementTab() {
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
-              En attente ({properties.filter((p) => !p.is_approved).length})
+              En attente ({properties.filter((p) => p.status === 'draft').length})
             </button>
           </div>
         </div>
@@ -207,7 +208,7 @@ export default function PropertiesManagementTab() {
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-gray-900">{getPropertyTypeLabel(property.property_type)}</div>
                     <div className="text-xs text-gray-500">
-                      {property.offer_type === 'sale' ? 'Vente' : 'Location'}
+                      {(property as any).operation_type === 'short-term-rental' ? 'Court terme' : property.offer_type === 'sale' ? 'Vente' : 'Location'}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
@@ -221,17 +222,10 @@ export default function PropertiesManagementTab() {
                     <div className="flex flex-col gap-1">
                       <span
                         className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                          property.is_approved
-                            ? 'bg-green-100 text-green-800'
-                            : 'bg-yellow-100 text-yellow-800'
-                        }`}
-                      >
-                        {property.is_approved ? 'Approuvée' : 'En attente'}
-                      </span>
-                      <span
-                        className={`px-2 py-1 text-xs font-semibold rounded-full ${
                           property.status === 'active'
-                            ? 'bg-blue-100 text-blue-800'
+                            ? 'bg-green-100 text-green-800'
+                            : property.status === 'draft'
+                            ? 'bg-yellow-100 text-yellow-800'
                             : property.status === 'sold' || property.status === 'rented'
                             ? 'bg-gray-100 text-gray-800'
                             : 'bg-red-100 text-red-800'
@@ -239,31 +233,38 @@ export default function PropertiesManagementTab() {
                       >
                         {property.status === 'active'
                           ? 'Active'
+                          : property.status === 'draft'
+                          ? 'Brouillon'
                           : property.status === 'sold'
                           ? 'Vendu'
                           : property.status === 'rented'
                           ? 'Loué'
                           : property.status}
                       </span>
+                      {property.operation_type && (
+                        <span className="text-xs text-gray-500">
+                          {property.operation_type === 'short-term-rental' ? 'Court terme' : property.operation_type === 'rental' ? 'Location' : 'Vente'}
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex items-center gap-2">
                       <button
-                        onClick={() => handleToggleApproval(property.id, property.is_approved)}
+                        onClick={() => handleToggleApproval(property.id, property.status === 'active')}
                         disabled={actionLoading === property.id}
                         className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                          property.is_approved
+                          property.status === 'active'
                             ? 'bg-red-100 text-red-700 hover:bg-red-200'
                             : 'bg-green-100 text-green-700 hover:bg-green-200'
                         } disabled:opacity-50`}
                       >
                         {actionLoading === property.id ? (
                           <i className="ri-loader-4-line animate-spin"></i>
-                        ) : property.is_approved ? (
-                          'Désapprouver'
+                        ) : property.status === 'active' ? (
+                          'Passer en brouillon'
                         ) : (
-                          'Approuver'
+                          'Activer'
                         )}
                       </button>
                       <button

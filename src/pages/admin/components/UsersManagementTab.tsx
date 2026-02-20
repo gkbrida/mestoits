@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../../lib/supabase';
+import UserActivityDetail from './UserActivityDetail';
 import { useEmail } from '../../../hooks/useEmail';
 
 interface User {
@@ -24,6 +25,7 @@ export default function UsersManagementTab() {
   const [filter, setFilter] = useState<'all' | 'individual' | 'professional'>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [userForActivity, setUserForActivity] = useState<User | null>(null);
   const [showDocumentsModal, setShowDocumentsModal] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -317,7 +319,8 @@ export default function UsersManagementTab() {
                 return (
                   <tr 
                     key={user.id} 
-                    className={rowClassName}
+                    className={`${rowClassName} cursor-pointer`}
+                    onClick={() => setUserForActivity(user)}
                   >
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2">
@@ -359,8 +362,14 @@ export default function UsersManagementTab() {
                       {user.is_active ? 'Actif' : 'Désactivé'}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setUserForActivity(user)}
+                        className="px-3 py-1 bg-teal-100 text-teal-700 rounded text-xs font-medium hover:bg-teal-200 transition-colors"
+                      >
+                        Activité
+                      </button>
                       <button
                         onClick={() => handleToggleActive(user.id, user.is_active)}
                         disabled={actionLoading === user.id}
@@ -422,6 +431,10 @@ export default function UsersManagementTab() {
           </div>
         )}
       </div>
+
+      {userForActivity && (
+        <UserActivityDetail user={userForActivity} onClose={() => setUserForActivity(null)} />
+      )}
 
       {/* Modal de documents professionnels */}
       {showDocumentsModal && selectedUser && (
