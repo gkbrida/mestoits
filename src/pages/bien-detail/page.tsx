@@ -972,8 +972,8 @@ L'équipe Mestoits`;
               )}
             </div>
 
-            {/* Bloc 3: Réserver / Contacter - juste avant Partenaires sur mobile */}
-            <div className="lg:col-span-1 order-3 lg:row-span-5 lg:self-start lg:sticky lg:top-24 space-y-4 sm:space-y-6">
+            {/* Bloc 3: Réserver / Contacter - sticky à droite sur desktop, ordre mobile entre Équipements et Partenaires */}
+            <div className="lg:col-span-1 lg:col-start-3 lg:row-start-1 lg:row-span-6 order-3 lg:self-start lg:sticky lg:top-24 space-y-4 sm:space-y-6">
                 {/* Afficher le formulaire de réservation pour location courte durée, sinon le formulaire de contact */}
                 {(property as any).operation_type === 'short-term-rental' ? (
                   <div ref={reservationFormRef}>
