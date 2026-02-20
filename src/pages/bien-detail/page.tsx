@@ -290,7 +290,6 @@ export default function BienDetailPage() {
   const [showStickyButton, setShowStickyButton] = useState(true);
   const stickyPermanentlyHiddenRef = useRef(false); // true une fois clic sticky/calendrier/Réserver
   const reservationFormRef = useRef<HTMLDivElement>(null);
-  const reservationValidationZoneRef = useRef<HTMLDivElement | null>(null);
   const contactFormRef = useRef<HTMLDivElement>(null);
 
   // Gérer le retour après paiement Stripe pour les réservations
@@ -752,10 +751,10 @@ L'équipe Mestoits`;
             <span className="text-gray-900 truncate">{property.title}</span>
           </div>
 
-          {/* Main Content */}
+          {/* Main Content - Mobile: Réserver/Contacter entre Équipements et Partenaires (order) */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-8">
-            {/* Left Column - Property Details */}
-            <div className="lg:col-span-2 space-y-4 md:space-y-6">
+            {/* Bloc 1: Gallery → Équipements */}
+            <div className="lg:col-span-2 order-1 space-y-4 md:space-y-6">
               {/* Image Gallery */}
               <ImageGallery
                 images={property.images || []}
@@ -913,7 +912,7 @@ L'équipe Mestoits`;
               {/* Characteristics */}
               <CharacteristicsSection property={property} conditionLabels={conditionLabels} standingLabels={standingLabels} getDepositorStatusLabel={getDepositorStatusLabel} isCommercial={isCommercial} isBuilding={isBuilding} isParking={isParking} />
 
-              {/* Features */}
+              {/* Features (Équipements) */}
               {property.features && property.features.length > 0 && (
                 <div className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 sm:p-6 md:p-8">
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Équipements</h2>
@@ -929,8 +928,10 @@ L'équipe Mestoits`;
                   </div>
                 </div>
               )}
+            </div>
 
-              {/* Land Titles */}
+            {/* Bloc 2: Land Titles, Price Comparison, Costs Details */}
+            <div className="lg:col-span-2 order-2 space-y-4 md:space-y-6">
               {property.land_titles && property.land_titles.length > 0 && (
                 <div className="bg-white rounded-xl md:rounded-2xl shadow-sm p-4 sm:p-6 md:p-8">
                   <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-4 sm:mb-6">Titres fonciers</h2>
@@ -947,7 +948,6 @@ L'équipe Mestoits`;
                 </div>
               )}
 
-              {/* Price Comparison */}
               {property.price_per_sqm && (
                 <PriceComparison
                   pricePerSqm={property.price_per_sqm}
@@ -957,7 +957,6 @@ L'équipe Mestoits`;
                 />
               )}
 
-              {/* Costs Details - Seulement pour location longue durée (pas location courte durée) */}
               {((property as any).operation_type === 'rental' || property.offer_type === 'rental') && 
                (property.agency_fees || property.security_deposit || property.advance_rent || property.service_charges || 
                 (property as any).advance_months || (property as any).deposit_months) && (
@@ -971,19 +970,10 @@ L'équipe Mestoits`;
                   price={property.price}
                 />
               )}
-
-              {/* Partners Section */}
-              <PartnersSection />
-
-              {/* Advertiser Card - Pas pour location courte durée */}
-              {property.owner_id && (property as any).operation_type !== 'short-term-rental' && (
-                <AdvertiserCard ownerId={property.owner_id} offeredBy={property.offered_by} />
-              )}
             </div>
 
-            {/* Right Column - Contact Form ou Réservation */}
-            <div className="lg:col-span-1">
-              <div className="sticky top-20 sm:top-24 space-y-4 sm:space-y-6">
+            {/* Bloc 3: Réserver / Contacter - juste avant Partenaires sur mobile */}
+            <div className="lg:col-span-1 order-3 lg:row-span-5 lg:self-start lg:sticky lg:top-24 space-y-4 sm:space-y-6">
                 {/* Afficher le formulaire de réservation pour location courte durée, sinon le formulaire de contact */}
                 {(property as any).operation_type === 'short-term-rental' ? (
                   <div ref={reservationFormRef}>
@@ -992,7 +982,6 @@ L'équipe Mestoits`;
                       price={property.price}
                       propertyTitle={property.title}
                       ownerId={property.owner_id}
-                      validationZoneRef={reservationValidationZoneRef}
                       onValidationZoneVisible={(visible) => {
                         if (visible) {
                           stickyPermanentlyHiddenRef.current = true;
@@ -1047,8 +1036,19 @@ L'équipe Mestoits`;
                     </div>
                   </div>
                 )}
-              </div>
             </div>
+
+            {/* Bloc 4: Partenaires */}
+            <div className="lg:col-span-2 order-4">
+              <PartnersSection />
+            </div>
+
+            {/* Bloc 5: Advertiser */}
+            {property.owner_id && (property as any).operation_type !== 'short-term-rental' && (
+              <div className="lg:col-span-2 order-5">
+                <AdvertiserCard ownerId={property.owner_id} offeredBy={property.offered_by} />
+              </div>
+            )}
           </div>
 
           {/* Similar Properties */}

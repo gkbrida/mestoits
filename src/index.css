@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Modales de paiement / confirmation : rendues via createPortal dans document.body avec z-[99999] */
+
 /* Ensure Leaflet maps stay below navbar (z-50) */
 .leaflet-container {
   z-index: 0 !important;

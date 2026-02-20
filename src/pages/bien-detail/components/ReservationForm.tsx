@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase';
 import { useEmail } from '../../../hooks/useEmail';
@@ -9,13 +10,11 @@ interface ReservationFormProps {
   price: number;
   propertyTitle?: string;
   ownerId?: string;
-  /** Ref sur un élément en bas du formulaire (bouton de validation) - pour masquer le bouton sticky mobile quand visible */
-  validationZoneRef?: React.RefObject<HTMLDivElement | null>;
-  /** Callback quand la zone de validation devient visible/invisible (pour masquer le sticky mobile) */
+  /** Callback quand la zone de validation devient visible (pour masquer le sticky mobile) */
   onValidationZoneVisible?: (visible: boolean) => void;
 }
 
-export default function ReservationForm({ propertyId, price, propertyTitle, ownerId, validationZoneRef, onValidationZoneVisible }: ReservationFormProps) {
+export default function ReservationForm({ propertyId, price, propertyTitle, ownerId, onValidationZoneVisible }: ReservationFormProps) {
   const navigate = useNavigate();
   const { sendEmail } = useEmail();
   const [startDate, setStartDate] = useState('');
@@ -64,6 +63,14 @@ export default function ReservationForm({ propertyId, price, propertyTitle, owne
     const interval = setInterval(() => setExpiryCheckTick((t) => t + 1), 30_000);
     return () => clearInterval(interval);
   }, [showPaymentModal, selectedReservation?.createdAt]);
+
+  // Bloquer le scroll du body quand le modal de paiement est ouvert
+  useEffect(() => {
+    if (showPaymentModal && selectedReservation) {
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = ''; };
+    }
+  }, [showPaymentModal, selectedReservation]);
 
   const loadPropertyDetails = async () => {
     try {
@@ -520,8 +527,7 @@ L'équipe Mestoits`;
           </div>
         )}
 
-        {/* Zone du bouton de validation - ref pour masquer le sticky mobile quand visible */}
-        <div ref={validationZoneRef} className="min-h-[1px]">
+        <div className="min-h-[1px]">
         {/* Bouton de réservation */}
         <button
           onClick={handleReserve}
@@ -555,9 +561,9 @@ L'équipe Mestoits`;
         )}
       </div>
 
-      {/* Payment Modal */}
-      {showPaymentModal && selectedReservation && (
-        <div className="fixed inset-0 bg-black/50 z-[9999] flex items-center justify-center p-4">
+      {/* Payment Modal - Portal pour éviter le stacking context du parent overflow */}
+      {showPaymentModal && selectedReservation && createPortal(
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-black/50">
           <div className="bg-white rounded-xl md:rounded-2xl p-4 sm:p-6 md:p-8 max-w-md w-full max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h3 className="text-xl sm:text-2xl font-bold text-gray-900">Confirmer le paiement</h3>
@@ -719,7 +725,8 @@ L'équipe Mestoits`;
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
