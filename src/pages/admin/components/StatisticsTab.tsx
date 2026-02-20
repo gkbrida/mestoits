@@ -26,6 +26,9 @@ interface Statistics {
   subscriptionsByPlan: Array<{ planType: string; planName: string; count: number; amount: number }>;
   totalSubscriptions: number;
   totalSubscriptionsAmount: number;
+  // Totaux financiers
+  totalMoneyTransit: number;
+  totalPlatformRevenue: number;
 }
 
 const formatPrice = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n)) + ' FCFA';
@@ -129,6 +132,9 @@ export default function StatisticsTab() {
       });
       const subscriptionsByPlan = Object.entries(subsByPlan).map(([planType, data]) => ({ planType, planName: data.name, count: data.count, amount: data.amount }));
 
+      const totalMoneyTransit = reservationsTotal + rentPaymentsTotal + installmentPaymentsTotal;
+      const totalPlatformRevenue = reservationsCommission + rentCommission + installmentCommission + totalSubsAmount;
+
       setStatistics({
         totalVisits: visits.length,
         uniqueVisitors,
@@ -152,6 +158,8 @@ export default function StatisticsTab() {
         subscriptionsByPlan,
         totalSubscriptions: userSubscriptions.length,
         totalSubscriptionsAmount: totalSubsAmount,
+        totalMoneyTransit,
+        totalPlatformRevenue,
       });
     } catch (err: any) {
       console.error('Erreur lors du chargement des statistiques:', err);
@@ -183,13 +191,41 @@ export default function StatisticsTab() {
   if (!statistics) return null;
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
+    <div className="space-y-4 sm:space-y-6">
+      {/* Totaux financiers - bien visibles */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+        <div className="bg-gradient-to-br from-teal-500 to-teal-600 rounded-xl shadow-lg p-5 sm:p-6 text-white">
           <div className="flex items-center justify-between">
             <div>
+              <p className="text-sm font-medium text-teal-100">Argent total transitant sur le site</p>
+              <p className="text-2xl sm:text-3xl font-bold mt-1">{formatPrice(statistics.totalMoneyTransit)}</p>
+              <p className="text-xs text-teal-100 mt-1">Réservations + Loyers + Paiements échelonnés</p>
+            </div>
+            <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white/20 rounded-xl flex items-center justify-center">
+              <i className="ri-exchange-dollar-line text-2xl sm:text-3xl"></i>
+            </div>
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-amber-500 to-amber-600 rounded-xl shadow-lg p-5 sm:p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-amber-100">Revenus de la plateforme</p>
+              <p className="text-2xl sm:text-3xl font-bold mt-1">{formatPrice(statistics.totalPlatformRevenue)}</p>
+              <p className="text-xs text-amber-100 mt-1">Commissions + Abonnements</p>
+            </div>
+            <div className="w-12 h-12 sm:w-14 sm:h-14 bg-white/20 rounded-xl flex items-center justify-center">
+              <i className="ri-bank-card-line text-2xl sm:text-3xl"></i>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+          <div className="flex items-center justify-between">
+            <div className="min-w-0">
               <p className="text-sm font-medium text-gray-600">Total visites</p>
-              <p className="text-3xl font-bold text-gray-900 mt-2">{statistics.totalVisits.toLocaleString()}</p>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-1 sm:mt-2">{statistics.totalVisits.toLocaleString()}</p>
               <p className="text-xs text-gray-500 mt-1">{statistics.uniqueVisitors} visiteurs uniques</p>
             </div>
             <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
@@ -198,11 +234,11 @@ export default function StatisticsTab() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-medium text-gray-600">Utilisateurs</p>
-              <p className="text-3xl font-bold text-gray-900 mt-2">{statistics.totalUsers.toLocaleString()}</p>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-1 sm:mt-2">{statistics.totalUsers.toLocaleString()}</p>
               <p className="text-xs text-gray-500 mt-1">
                 {statistics.usersByType.individual} particuliers, {statistics.usersByType.professional} professionnels
               </p>
@@ -213,11 +249,11 @@ export default function StatisticsTab() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="min-w-0">
               <p className="text-sm font-medium text-gray-600">Professionnels</p>
-              <p className="text-3xl font-bold text-gray-900 mt-2">{statistics.totalProfessionals.toLocaleString()}</p>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-1 sm:mt-2">{statistics.totalProfessionals.toLocaleString()}</p>
             </div>
             <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center">
               <i className="ri-briefcase-line text-2xl text-purple-600"></i>
@@ -225,11 +261,11 @@ export default function StatisticsTab() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
           <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Annonces </p>
-              <p className="text-3xl font-bold text-gray-900 mt-2">{statistics.totalProperties.toLocaleString()}</p>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-gray-600">Annonces</p>
+              <p className="text-2xl sm:text-3xl font-bold text-gray-900 mt-1 sm:mt-2">{statistics.totalProperties.toLocaleString()}</p>
               <p className="text-xs text-gray-500 mt-1">
                 {statistics.activeProperties} actives, {statistics.pendingProperties} en attente
               </p>
@@ -242,9 +278,9 @@ export default function StatisticsTab() {
       </div>
 
       {/* Statistiques financières */}
-      <div className="bg-white rounded-lg shadow p-6">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Données financières</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           <div className="border border-gray-200 rounded-lg p-4">
             <h4 className="text-sm font-semibold text-teal-700 mb-2">Réservations (location courte durée)</h4>
             <p className="text-2xl font-bold text-gray-900">{statistics.reservationsCount}</p>
@@ -267,7 +303,7 @@ export default function StatisticsTab() {
       </div>
 
       {/* Abonnements */}
-      <div className="bg-white rounded-lg shadow p-6">
+      <div className="bg-white rounded-lg shadow p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Abonnements</h3>
         <div className="flex flex-wrap gap-4 mb-4">
           <div className="px-4 py-2 bg-teal-50 rounded-lg">
@@ -306,8 +342,8 @@ export default function StatisticsTab() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Visites des 7 derniers jours</h3>
           <div className="space-y-2">
             {statistics.visitsByDay.length > 0 ? (
@@ -332,7 +368,7 @@ export default function StatisticsTab() {
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow p-6">
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Annonces par type</h3>
           <div className="space-y-3">
             {Object.entries(statistics.propertiesByType).length > 0 ? (
